@@ -2,7 +2,7 @@ defaults:
   - model: baseline
   - writer: wandb
   - metrics: example
-  - datasets: example
+  - datasets: barkopedia
   - dataloader: example
   - transforms: example
   - _self_
