@@ -112,3 +112,4 @@ outputs/
 .vscode/
 .idea/
 __MACOSX/
+uv.lock
