@@ -113,3 +113,4 @@ outputs/
 .idea/
 __MACOSX/
 uv.lock
+dog2vec_dataset

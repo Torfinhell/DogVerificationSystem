@@ -1,7 +1,7 @@
 from torch import nn
 from torch.nn import Sequential
-
-
+from einops import rearrange
+import torch
 class BaselineModel(nn.Module):
     """
     Simple MLP
@@ -17,15 +17,13 @@ class BaselineModel(nn.Module):
         super().__init__()
 
         self.net = Sequential(
-            # people say it can approximate any function...
             nn.Linear(in_features=n_feats, out_features=fc_hidden),
             nn.ReLU(),
             nn.Linear(in_features=fc_hidden, out_features=fc_hidden),
             nn.ReLU(),
             nn.Linear(in_features=fc_hidden, out_features=n_class),
         )
-
-    def forward(self, data_object, **batch):
+    def forward(self, spectrogram, **batch):
         """
         Model forward method.
 
@@ -34,7 +32,7 @@ class BaselineModel(nn.Module):
         Returns:
             output (dict): output dict containing logits.
         """
-        return {"logits": self.net(data_object)}
+        return {"logits": torch.mean(self.net(rearrange(spectrogram, "b f t->b t f")), dim=1)}
 
     def __str__(self):
         """
