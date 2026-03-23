@@ -4,7 +4,7 @@ from typing import List
 
 import torch
 from torch.utils.data import Dataset
-
+import torchaudio
 logger = logging.getLogger(__name__)
 
 
@@ -56,13 +56,16 @@ class BaseDataset(Dataset):
                 (a single dataset element).
         """
         data_dict = self._index[ind]
-        data_path = data_dict["path"]
-        data_object = self.load_object(data_path)
-        data_label = data_dict["label"]
-
-        instance_data = {"data_object": data_object, "labels": data_label}
+        audio, sr=torchaudio.load(data_dict["path"])
+        if audio.dim() == 2 and audio.size(0) > 1:
+            audio = audio.mean(dim=0, keepdim=True)
+        if audio.dim() == 2:
+            audio = audio.squeeze(0)
+        instance_data = {"audio": audio, "labels": data_dict["label"], "sample_rate":sr}
         instance_data = self.preprocess_data(instance_data)
-
+        if "get_spectrogram" in self.instance_transforms:
+            spectrogram=self.instance_transforms["get_spectrogram"](instance_data["audio"])
+            instance_data.update(self.preprocess_data({"spectrogram":spectrogram}))
         return instance_data
 
     def __len__(self):
@@ -70,18 +73,6 @@ class BaseDataset(Dataset):
         Get length of the dataset (length of the index).
         """
         return len(self._index)
-
-    def load_object(self, path):
-        """
-        Load object from disk.
-
-        Args:
-            path (str): path to the object.
-        Returns:
-            data_object (Tensor):
-        """
-        data_object = torch.load(path)
-        return data_object
 
     def preprocess_data(self, instance_data):
         """
@@ -98,10 +89,9 @@ class BaseDataset(Dataset):
                 instance transform).
         """
         if self.instance_transforms is not None:
-            for transform_name in self.instance_transforms.keys():
-                instance_data[transform_name] = self.instance_transforms[
-                    transform_name
-                ](instance_data[transform_name])
+            for transform_name, transform_func in self.instance_transforms.items():
+                if transform_func is not None and transform_name != "get_spectrogram" and transform_name in instance_data:
+                    instance_data[transform_name] = transform_func(instance_data[transform_name])
         return instance_data
 
     @staticmethod
