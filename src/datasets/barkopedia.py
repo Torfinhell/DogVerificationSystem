@@ -11,6 +11,7 @@ from src.datasets.base_dataset import BaseDataset
 from src.utils.io_utils import ROOT_PATH
 
 
+
 class BarkopediaDataset(BaseDataset):
     """
     Barkopedia Individual Dog Recognition Dataset.
@@ -83,14 +84,24 @@ class BarkopediaDataset(BaseDataset):
 
         df = pd.read_csv(metadata_path)
         index = []
-        for _, row in tqdm(
-            df.iterrows(),
-            desc=f"Building test index",
-            total=len(df),
-        ):
+        for _, row in tqdm(df.iterrows(), desc="Building test index", total=len(df)):
             audio_path = audio_dir / row["filename"]
+
             if not audio_path.exists():
-                raise FileNotFoundError(f"Expected audio file {audio_path} not found.")
+                print(f"Warning: file {audio_path} missing, skipping")
+                continue
+            if audio_path.stat().st_size == 0:
+                print(f"Warning: empty file {audio_path}, skipping")
+                continue
+            try:
+                with sf.SoundFile(audio_path) as f:
+                    if f.frames == 0:
+                        print(f"Warning: file {audio_path} has zero frames, skipping")
+                        continue
+            except Exception as e:
+                print(f"Warning: corrupt file {audio_path}: {e}, skipping")
+                continue
+
             entry = {
                 "path": str(audio_path.absolute()),
                 "audio_len": float(row["duration"]),
@@ -136,12 +147,28 @@ class BarkopediaDataset(BaseDataset):
             total=len(df_filtered),
         ):
             audio_path = audio_dir / row["filename"]
+
+            # ---- File validation ----
             if not audio_path.exists():
-                raise FileNotFoundError(f"Expected audio file {audio_path} not found.")
+                print(f"Warning: file {audio_path} missing, skipping")
+                continue
+            if audio_path.stat().st_size == 0:
+                print(f"Warning: empty file {audio_path}, skipping")
+                continue
+            try:
+                with sf.SoundFile(audio_path) as f:
+                    if f.frames == 0:
+                        print(f"Warning: file {audio_path} has zero frames, skipping")
+                        continue
+            except Exception as e:
+                print(f"Warning: corrupt file {audio_path}: {e}, skipping")
+                continue
+            # -------------------------
+
             entry = {
                 "path": str(audio_path.absolute()),
                 "audio_len": float(row["duration"]),
-                "label": int(row["dog_id"]),
+                "label": int(row["dog_id"])-1,   # FIX: use proper mapping later
             }
             index.append(entry)
         return index

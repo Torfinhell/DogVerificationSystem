@@ -10,7 +10,7 @@ val:
   part: "val"
   train_split: 0.9
   instance_transforms: ${transforms.instance_transforms.inference}
-test:
-  _target_: src.datasets.BarkopediaDataset
-  part: "test"
-  instance_transforms: ${transforms.instance_transforms.inference}
+# test:
+  # _target_: src.datasets.BarkopediaDataset
+  # part: "test"
+  # instance_transforms: ${transforms.instance_transforms.inference}

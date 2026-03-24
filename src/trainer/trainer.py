@@ -33,7 +33,6 @@ class Trainer(BaseTrainer):
         if self.is_train:
             metric_funcs = self.metrics["train"]
             self.optimizer.zero_grad()
-
         outputs = self.model(**batch)
         batch.update(outputs)
 
@@ -48,7 +47,7 @@ class Trainer(BaseTrainer):
                 self.lr_scheduler.step()
 
         # update metrics for each loss (in case of multiple losses)
-        for loss_name in self.config.writer.loss_names:
+        for loss_name in self.config.writer.logger.loss_names:
             metrics.update(loss_name, batch[loss_name].item())
 
         for met in metric_funcs:

@@ -1,0 +1,4 @@
+defaults:
+  - batch_transforms: basic
+  - instance_transforms: mfcc
+  - _self_

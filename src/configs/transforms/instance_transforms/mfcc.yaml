@@ -1,0 +1,14 @@
+train:
+  get_feature:
+    _target_: src.transforms.MfccExtractor  
+    sample_rate: 16000
+    n_mfcc: 24
+    hop_length_sec: 0.01      # 10 ms
+    win_length_sec: 0.025     # 25 ms
+inference:
+  get_feature:
+    _target_: src.transforms.MfccExtractor
+    sample_rate: 16000
+    n_mfcc: 24
+    hop_length_sec: 0.01
+    win_length_sec: 0.025

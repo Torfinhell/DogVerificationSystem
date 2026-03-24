@@ -118,13 +118,13 @@ class BaseTrainer:
         # define metrics
         self.metrics = metrics
         self.train_metrics = MetricTracker(
-            *self.config.writer.loss_names,
+            *self.config.writer.logger.loss_names,
             "grad_norm",
             *[m.name for m in self.metrics["train"]],
             writer=self.writer,
         )
         self.evaluation_metrics = MetricTracker(
-            *self.config.writer.loss_names,
+            *self.config.writer.logger.loss_names,
             *[m.name for m in self.metrics["inference"]],
             writer=self.writer,
         )
@@ -132,7 +132,7 @@ class BaseTrainer:
         # define checkpoint dir and init everything if required
 
         self.checkpoint_dir = (
-            ROOT_PATH / config.trainer.save_dir / config.writer.run_name
+            ROOT_PATH / config.trainer.save_dir / config.writer.logger.run_name
         )
 
         if config.trainer.get("resume_from") is not None:
@@ -475,13 +475,13 @@ class BaseTrainer:
         filename = str(self.checkpoint_dir / f"checkpoint-epoch{epoch}.pth")
         if not (only_best and save_best):
             torch.save(state, filename)
-            if self.config.writer.log_checkpoints:
+            if self.config.writer.logger.log_checkpoints:
                 self.writer.add_checkpoint(filename, str(self.checkpoint_dir.parent))
             self.logger.info(f"Saving checkpoint: {filename} ...")
         if save_best:
             best_path = str(self.checkpoint_dir / "model_best.pth")
             torch.save(state, best_path)
-            if self.config.writer.log_checkpoints:
+            if self.config.writer.logger.log_checkpoints:
                 self.writer.add_checkpoint(best_path, str(self.checkpoint_dir.parent))
             self.logger.info("Saving current best: model_best.pth ...")
 
