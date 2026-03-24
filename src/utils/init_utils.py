@@ -97,7 +97,7 @@ def resume_config(save_dir):
         run_id (str): base-36 string with experiment id.
     """
     saved_config = OmegaConf.load(save_dir / "config.yaml")
-    run_id = saved_config.writer.run_id
+    run_id = saved_config.writer.logger.run_id
     print(f"Resuming training from run {run_id}...")
     return run_id
 
@@ -127,10 +127,10 @@ def saving_init(save_dir, config):
     save_dir.mkdir(exist_ok=True, parents=True)
 
     if run_id is None:
-        run_id = generate_id(length=config.writer.id_length)
+        run_id = generate_id(length=config.writer.logger.id_length)
 
     OmegaConf.set_struct(config, False)
-    config.writer.run_id = run_id
+    config.writer.logger.run_id = run_id
     OmegaConf.set_struct(config, True)
 
     OmegaConf.save(config, save_dir / "config.yaml")
@@ -142,14 +142,14 @@ def setup_saving_and_logging(config):
     """
     Initialize the logger, writer, and saving directory.
     The saving directory is defined by the run_name and save_dir
-    arguments of config.writer and config.trainer, respectfully.
+    arguments of config.writer.logger and config.trainer, respectfully.
 
     Args:
         config (DictConfig): hydra config for the current experiment.
     Returns:
         logger (Logger): logger that logs output.
     """
-    save_dir = ROOT_PATH / config.trainer.save_dir / config.writer.run_name
+    save_dir = ROOT_PATH / config.trainer.save_dir / config.writer.logger.run_name
     saving_init(save_dir, config)
 
     if config.trainer.get("resume_from") is not None:

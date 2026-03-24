@@ -2,7 +2,7 @@ from torch import nn
 from torch.nn import Sequential
 from einops import rearrange
 import torch
-class BaselineModel(nn.Module):
+class EcappaTDNN(nn.Module):
     """
     Simple MLP
     """

@@ -15,7 +15,7 @@ class SoftmaxLoss(nn.Module):
         """
         Args:
             logits (Tensor): predictions (Batch_speakers, NUM_SPEAKERS)
-            labels (Tensor): ground-truth labels.(Batch_speakers, 1)
+            labels (Tensor): ground-truth labels.(Batch_speakers,)
         Returns:
             losses (dict): dict containing calculated loss functions.
         """

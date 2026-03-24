@@ -18,9 +18,9 @@ def plot_images(imgs, config):
         image (Tensor): a single figure with imgs plotted side-to-side.
     """
     # name of each img in the array
-    names = config.writer.names
+    names = config.writer.logger.names
     # figure size
-    figsize = config.writer.figsize
+    figsize = config.writer.logger.figsize
     fig, axes = plt.subplots(1, len(names), figsize=figsize)
     for i in range(len(names)):
         # channels must be in the last dim
@@ -40,3 +40,5 @@ def plot_images(imgs, config):
     plt.close()
 
     return image
+
+

@@ -1,0 +1,9 @@
+_target_: src.model.XVectorModel
+channel_sizes: [24, 512, 512, 512, 512, 1500]
+output_dim: 512
+kernel_sizes: [5, 3, 3, 1, 1] 
+dilations: [1, 2, 3, 1, 1]
+num_groups: 2
+activation:  
+  _target_: torch.nn.ReLU 
+dropout: 0.1

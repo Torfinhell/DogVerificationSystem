@@ -1,10 +1,10 @@
 defaults:
-  - model: baseline
+  - model: xvector
   - writer: wandb
   - metrics: example
   - datasets: barkopedia
   - dataloader: example
-  - transforms: example
+  - transforms: xvector
   - _self_
 optimizer:
   _target_: torch.optim.Adam

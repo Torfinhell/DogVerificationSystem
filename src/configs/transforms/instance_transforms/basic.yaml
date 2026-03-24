@@ -1,5 +1,5 @@
 train:
-  get_spectrogram: # special key for getting spectrogram
+  get_feature: # special key for getting extracted_feature
     _target_: torchaudio.transforms.MelSpectrogram
     sample_rate: 16000
   audio: null # name of the tensor on which we apply transform
@@ -7,6 +7,6 @@ train:
     # transforms:
     #   - _target_: src.transforms.wav_augs.Gain
 inference:
-  get_spectrogram:
+  get_feature:
     _target_: torchaudio.transforms.MelSpectrogram
     sample_rate: 16000
