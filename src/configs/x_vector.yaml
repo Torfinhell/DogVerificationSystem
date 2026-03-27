@@ -1,10 +1,10 @@
 defaults:
-  - model: xvector
+  - model: x_vector
   - writer: wandb
   - metrics: basic
   - datasets: barkopedia
   - dataloader: basic
-  - transforms: xvector
+  - transforms: x_vector
   - batch_sampler: hpm
   - _self_
 optimizer:
