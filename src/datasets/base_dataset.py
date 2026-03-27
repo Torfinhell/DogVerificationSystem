@@ -4,7 +4,7 @@ from typing import List
 
 import torch
 from torch.utils.data import Dataset
-import torchaudio
+import soundfile as sf
 logger = logging.getLogger(__name__)
 
 
@@ -56,7 +56,12 @@ class BaseDataset(Dataset):
                 (a single dataset element).
         """
         data_dict = self._index[ind]
-        audio, sr=torchaudio.load(data_dict["path"], backend="soundfile")
+        audio, sr = sf.read(data_dict["path"])
+        audio = torch.from_numpy(audio).float()
+        if audio.ndim == 1:
+            audio = audio.unsqueeze(0) 
+        else:
+            audio = audio.transpose(0, 1) 
         if audio.dim() == 2 and audio.size(0) > 1:
             audio = audio.mean(dim=0, keepdim=True)
         if audio.dim() == 2:
