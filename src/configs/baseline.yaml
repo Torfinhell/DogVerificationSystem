@@ -1,10 +1,10 @@
 defaults:
   - model: baseline
   - writer: wandb
-  - metrics: example
+  - metrics: basic
   - datasets: barkopedia
-  - dataloader: example
-  - transforms: example
+  - dataloader: basic
+  - transforms: baseline
   - _self_
 optimizer:
   _target_: torch.optim.Adam

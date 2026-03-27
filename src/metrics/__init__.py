@@ -1,2 +1,2 @@
-from src.metrics.example import ClassificationMetric
+from src.metrics.classification import ClassificationMetric
 from src.metrics.confusion_matrix import ConfusionMatrixMetric
