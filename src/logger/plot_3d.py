@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from torchvision.transforms import ToTensor
 from PIL import Image
-# plt.switch_backend("agg")  
+plt.switch_backend("agg")  
 
 def sphere_plot_tensor(embeddings, labels, figsize=(10, 10), dpi=100):
     """
