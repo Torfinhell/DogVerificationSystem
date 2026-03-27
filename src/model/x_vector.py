@@ -16,6 +16,8 @@ class TDNN(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
+        if x.ndim == 2:
+            x = x.unsqueeze(1) 
         return self.dropout(self.norm(self.activation(self.conv(x))))
 
 class XVectorModel(nn.Module):
