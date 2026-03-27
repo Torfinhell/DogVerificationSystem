@@ -56,14 +56,7 @@ class BaseDataset(Dataset):
                 (a single dataset element).
         """
         data_dict = self._index[ind]
-        import os
-        try:
-            if not os.path.exists(data_dict["path"]):
-                print(f"MISSING FILE: {data_dict['path']}")
-            audio, sr = sf.read(data_dict["path"])
-        except Exception as e:
-            print(f"Error loading {data_dict['path']}: {type(e).__name__}")
-            raise e
+        audio, sr = sf.read(data_dict["path"])
         audio = torch.from_numpy(audio).float()
         if audio.ndim == 1:
             audio = audio.unsqueeze(0) 
