@@ -1,11 +1,10 @@
 import io
+import matplotlib
+matplotlib.use('Agg')  
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from torchvision.transforms import ToTensor
 from PIL import Image
-
-plt.switch_backend("agg")  # avoid main thread issues
 
 def sphere_plot_tensor(embeddings, labels, figsize=(10, 10), dpi=100):
     """
