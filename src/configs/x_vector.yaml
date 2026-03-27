@@ -1,9 +1,9 @@
 defaults:
   - model: xvector
   - writer: wandb
-  - metrics: example
+  - metrics: basic
   - datasets: barkopedia
-  - dataloader: example
+  - dataloader: basic
   - transforms: xvector
   - batch_sampler: hpm
   - _self_
