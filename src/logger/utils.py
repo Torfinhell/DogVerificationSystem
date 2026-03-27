@@ -1,10 +1,9 @@
 import io
-
+import matplotlib
+matplotlib.use('Agg')   
 import matplotlib.pyplot as plt
 import PIL
 from torchvision.transforms import ToTensor
-
-plt.switch_backend("agg")  # fix RuntimeError: main thread is not in main loop
 
 
 def plot_images(imgs, config):
