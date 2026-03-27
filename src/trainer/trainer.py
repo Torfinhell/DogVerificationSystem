@@ -1,3 +1,4 @@
+import torch
 from src.metrics.tracker import MetricTracker
 from src.trainer.base_trainer import BaseTrainer
 
@@ -51,7 +52,28 @@ class Trainer(BaseTrainer):
             metrics.update(loss_name, batch[loss_name].item())
 
         for met in metric_funcs:
-            metrics.update(met.name, met(**batch))
+            # Skip confusion matrix metric - it will be extracted in _evaluation_epoch
+            if met.name == "confusion_matrix":
+                met(**batch)
+                continue
+
+            met_value = met(**batch)
+            
+            if isinstance(met_value, torch.Tensor):
+                if met_value.numel() == 1:
+                    met_value = float(met_value.detach().cpu().item())
+                else:
+                    # non-scalar metric - skip metric tracker
+                    continue
+
+            if isinstance(met_value, (float, int)) and not (isinstance(met_value, float) and (met_value != met_value)):  # Check for NaN
+                metrics.update(met.name, met_value)
+            elif met_value is not None:
+                try:
+                    metrics.update(met.name, float(met_value))
+                except Exception:
+                    pass
+
         return batch
 
     def _log_batch(self, batch_idx, batch, mode="train"):

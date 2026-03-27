@@ -1,0 +1,7 @@
+sampler:
+  _target_: src.batch_sampler.HPMBatchSampler
+  n_selected_speakers: 8
+  n_similar_speakers: 4
+  n_utterances_per_speaker: 4
+  random_seed: 42
+  drop_last: True

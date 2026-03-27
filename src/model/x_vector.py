@@ -12,10 +12,11 @@ class TDNN(nn.Module):
             padding_mode="reflect"
         )
         self.activation = activation
+        self.norm=nn.BatchNorm1d(out_channels)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        return self.dropout(self.activation(self.conv(x)))
+        return self.dropout(self.norm(self.activation(self.conv(x))))
 
 class XVectorModel(nn.Module):
     def __init__(self, channel_sizes, output_dim, kernel_sizes, dilations, num_groups, activation=nn.ReLU(), dropout=0.1):
