@@ -9,6 +9,7 @@ defaults:
 optimizer:
   _target_: torch.optim.Adam
   lr: 3e-4
+  lr_loss: null # e.g. 1e-3 for AAM-Softmax embedding; null = same lr for model + loss params
 lr_scheduler:
   _target_: torch.optim.lr_scheduler.StepLR
   gamma: 0.9
