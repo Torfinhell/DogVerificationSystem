@@ -3,9 +3,15 @@ logger:
   project_name: "pytorch_template"
   entity: null
   run_name: "testing"
-  mode: "disabled"
+  mode: "online"
   loss_names: ["loss"] # which losses to log (useful for multi-loss tasks, s.a. GANs)
   log_checkpoints: False # set to True if you want to log save_dir with checkpoints to W&B
   id_length: 8 # length of the run_id
   sync_tensorboard: False
-plot_3d: True
+plot_3d: true # PCA 3D scatter of train/val embeddings (matplotlib → W&B Image)
+embedding_max_samples: 2048
+embedding_max_batches: 64
+log_confusion_matrix_image: true # confusion matrix heatmap per eval partition
+# Optional multi-panel image logging (plot_images): names length must match batch dim of ``img``
+log_batch_image_names: []
+log_batch_figsize: [12, 4]

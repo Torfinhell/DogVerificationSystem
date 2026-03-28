@@ -2,6 +2,9 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
+import torch
+
+from src.utils.plot_utils import confusion_matrix_figure, sphere_plot_tensor
 
 
 class WandBWriter:
@@ -37,12 +40,14 @@ class WandBWriter:
             mode (str): if online, log data to the remote server. If
                 offline, log locally.
         """
+        self.run_id = run_id
+        self.wandb = None
+        self._mutable_tables: dict[str, object] = {}
+
         try:
             import wandb
 
             wandb.login()
-
-            self.run_id = run_id
 
             wandb.init(
                 project=project_name,
@@ -81,7 +86,7 @@ class WandBWriter:
         self.step = step
         if step == 0:
             self.timer = datetime.now()
-        else:
+        elif self.wandb is not None:
             duration = datetime.now() - self.timer
             self.add_scalar(
                 "steps_per_sec", (self.step - previous_step) / duration.total_seconds()
@@ -99,7 +104,7 @@ class WandBWriter:
         Returns:
             object_name (str): updated object name.
         """
-        return f"{object_name}_{self.mode}"
+        return f"{object_name}_{self.mode}" if self.mode else object_name
 
     def add_checkpoint(self, checkpoint_path, save_dir):
         """
@@ -112,6 +117,8 @@ class WandBWriter:
             checkpoint_path (str): path to the checkpoint file.
             save_dir (str): path to the dir, where checkpoint is saved.
         """
+        if self.wandb is None:
+            return
         self.wandb.save(checkpoint_path, base_path=save_dir)
 
     def add_scalar(self, scalar_name, scalar):
@@ -122,6 +129,8 @@ class WandBWriter:
             scalar_name (str): name of the scalar to use in the tracker.
             scalar (float): value of the scalar.
         """
+        if self.wandb is None:
+            return
         self.wandb.log(
             {
                 self._object_name(scalar_name): scalar,
@@ -136,6 +145,8 @@ class WandBWriter:
         Args:
             scalars (dict): dict, containing scalar name and value.
         """
+        if self.wandb is None:
+            return
         self.wandb.log(
             {
                 self._object_name(scalar_name): scalar
@@ -153,6 +164,8 @@ class WandBWriter:
             image (Path | ndarray | Image): image in the WandB-friendly
                 format.
         """
+        if self.wandb is None:
+            return
         self.wandb.log(
             {self._object_name(image_name): self.wandb.Image(image)}, step=self.step
         )
@@ -166,6 +179,8 @@ class WandBWriter:
             audio (Path | ndarray): audio in the WandB-friendly format.
             sample_rate (int): audio sample rate.
         """
+        if self.wandb is None:
+            return
         audio = audio.detach().cpu().numpy().T
         self.wandb.log(
             {
@@ -184,6 +199,8 @@ class WandBWriter:
             text_name (str): name of the text to use in the tracker.
             text (str): text content.
         """
+        if self.wandb is None:
+            return
         self.wandb.log(
             {self._object_name(text_name): self.wandb.Html(text)}, step=self.step
         )
@@ -198,6 +215,8 @@ class WandBWriter:
                 histogram of.
             bins (int | str): the definition of bins for the histogram.
         """
+        if self.wandb is None:
+            return
         values_for_hist = values_for_hist.detach().cpu().numpy()
         np_hist = np.histogram(values_for_hist, bins=bins)
         if np_hist[0].shape[0] > 512:
@@ -209,14 +228,26 @@ class WandBWriter:
 
     def add_table(self, table_name, table: pd.DataFrame):
         """
-        Log table to the experiment tracker.
+        Log table to the experiment tracker (append rows across calls for the same keyed name).
 
         Args:
             table_name (str): name of the table to use in the tracker.
             table (DataFrame): table content.
         """
+        if self.wandb is None:
+            return
+        oname = self._object_name(table_name)
+        table = table.copy()
+        table["step"] = self.step
+        if oname not in self._mutable_tables:
+            self._mutable_tables[oname] = self.wandb.Table(
+                dataframe=table, log_mode="MUTABLE"
+            )
+        else:
+            for _, row in table.iterrows():
+                self._mutable_tables[oname].add_data(*row.tolist())
         self.wandb.log(
-            {self._object_name(table_name): self.wandb.Table(dataframe=table)},
+            {oname: self._mutable_tables[oname]},
             step=self.step,
         )
 
@@ -228,3 +259,56 @@ class WandBWriter:
 
     def add_embedding(self, embedding_name, embedding):
         raise NotImplementedError()
+
+    def log_epoch_summary(self, logs_dict: dict, epoch: int):
+        """
+        Log every numeric value in ``logs_dict`` under ``epoch_summary/<key>`` for W&B charts.
+        """
+        if self.wandb is None:
+            return
+        payload = {}
+        for key, value in logs_dict.items():
+            if isinstance(value, torch.Tensor) and value.numel() == 1:
+                value = float(value.detach().cpu().item())
+            if isinstance(value, (float, int, np.integer, np.floating)) and not (
+                isinstance(value, float) and value != value
+            ):
+                payload[f"epoch_summary/{key}"] = float(value)
+        if payload:
+            payload["epoch_summary/epoch"] = float(epoch)
+            self.wandb.log(payload, step=self.step)
+
+    def add_plot_3d(
+        self,
+        plot_name: str,
+        points_3d: np.ndarray,
+        labels: np.ndarray,
+        title: str | None = None,
+    ):
+        """
+        Log a 3D sphere plot of embeddings (PCA coords, L2-normalized) as a W&B image.
+        """
+        if self.wandb is None:
+            return
+        if isinstance(points_3d, torch.Tensor):
+            points_3d = points_3d.detach().float().cpu().numpy()
+        if isinstance(labels, torch.Tensor):
+            labels = labels.detach().cpu().numpy()
+        t = sphere_plot_tensor(
+            points_3d, labels, title=title or plot_name
+        )
+        img = t.permute(1, 2, 0).numpy()
+        self.wandb.log(
+            {self._object_name(plot_name): self.wandb.Image(img)},
+            step=self.step,
+        )
+
+    def add_confusion_matrix_image(self, name: str, cm, title: str | None = None):
+        """Log a confusion matrix tensor/array as a heatmap image."""
+        if self.wandb is None:
+            return
+        img = confusion_matrix_figure(cm, title=title or name)
+        self.wandb.log(
+            {self._object_name(name): self.wandb.Image(img)},
+            step=self.step,
+        )
