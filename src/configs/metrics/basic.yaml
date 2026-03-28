@@ -55,3 +55,14 @@ inference: # metrics that are calculated during inference (eval)
       task: "multiclass"
     device: ${trainer.device}
     name: "confusion_matrix"
+
+  - _target_: src.metrics.EERMetric
+    device: ${trainer.device}
+    name: "EER"
+
+  - _target_: src.metrics.DCFMetric
+    device: ${trainer.device}
+    p_target: 0.01
+    c_miss: 1.0
+    c_fa: 1.0
+    name: "minDCF"
