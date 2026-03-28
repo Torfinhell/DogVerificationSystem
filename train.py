@@ -8,6 +8,7 @@ from omegaconf import OmegaConf
 from src.datasets.data_utils import get_dataloaders
 from src.trainer import Trainer
 from src.utils.init_utils import set_random_seed, setup_saving_and_logging
+from src.utils.optim_utils import instantiate_optimizer
 from src.utils.torch_utils import set_tf32_allowance
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -51,13 +52,8 @@ def main(config):
     loss_function = instantiate(config.loss_function).to(device)
     metrics = instantiate(config.metrics)
 
-    # build optimizer, learning rate scheduler (include loss params e.g. AAM-Softmax embedding)
-    trainable_params = [
-        p
-        for p in list(model.parameters()) + list(loss_function.parameters())
-        if p.requires_grad
-    ]
-    optimizer = instantiate(config.optimizer, params=trainable_params)
+    # optimizer: optional lr_loss for AAM-Softmax (etc.) vs model — see optim_utils
+    optimizer = instantiate_optimizer(config.optimizer, model, loss_function)
     lr_scheduler = instantiate(config.lr_scheduler, optimizer=optimizer)
 
     # epoch_len = number of iterations for iteration-based training
