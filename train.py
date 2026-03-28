@@ -8,6 +8,7 @@ from omegaconf import OmegaConf
 from src.datasets.data_utils import get_dataloaders
 from src.trainer import Trainer
 from src.utils.init_utils import set_random_seed, setup_saving_and_logging
+from src.utils.torch_utils import set_tf32_allowance
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -33,20 +34,29 @@ def main(config):
     else:
         device = config.trainer.device
 
+    if config.trainer.get("allow_tf32") is not None:
+        set_tf32_allowance(bool(config.trainer.allow_tf32))
+
     # setup data_loader instances
     # batch_transforms should be put on device
     dataloaders, batch_transforms = get_dataloaders(config, device)
 
-    # build model architecture, then print to console
+    # build model architecture; optional torch.compile via Hydra (trainer.compile.call)
     model = instantiate(config.model).to(device)
+    if config.trainer.compile.enabled:
+        model = instantiate(config.trainer.compile.call, model)
     logger.info(model)
 
     # get function handles of loss and metrics
     loss_function = instantiate(config.loss_function).to(device)
     metrics = instantiate(config.metrics)
 
-    # build optimizer, learning rate scheduler
-    trainable_params = filter(lambda p: p.requires_grad, model.parameters())
+    # build optimizer, learning rate scheduler (include loss params e.g. AAM-Softmax embedding)
+    trainable_params = [
+        p
+        for p in list(model.parameters()) + list(loss_function.parameters())
+        if p.requires_grad
+    ]
     optimizer = instantiate(config.optimizer, params=trainable_params)
     lr_scheduler = instantiate(config.lr_scheduler, optimizer=optimizer)
 

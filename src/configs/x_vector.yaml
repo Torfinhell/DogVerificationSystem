@@ -23,6 +23,18 @@ trainer:
   device_tensors: ["extracted_feature", "labels"] # which tensors should be on device (ex. GPU)
   resume_from: null # null or path to the checkpoint dir with *.pth and config.yaml
   device: 'auto' # device name or "auto"
+  allow_tf32: true
+  amp:
+    enabled: false
+    dtype: bfloat16
+  compile:
+    enabled: false
+    call:
+      _target_: torch.compile
+      mode: default
+      fullgraph: false
+      dynamic: false
+      backend: inductor
   override: False # if True, will override the previous run with the same name
   monitor: "max val_MulticlassAccuracy" # "off" or "max/min metric_name", i.e. our goal is to maximize/minimize metric
   save_period: 5 # checkpoint each save_period epochs in addition to the best epoch

@@ -5,6 +5,7 @@ from numpy import inf
 from torch.nn.utils import clip_grad_norm_
 from tqdm.auto import tqdm
 
+from src.metrics.epoch_metric import EpochMetric
 from src.datasets.data_utils import inf_loop
 from src.metrics.tracker import MetricTracker
 from src.utils.io_utils import ROOT_PATH
@@ -124,12 +125,20 @@ class BaseTrainer:
         self.train_metrics = MetricTracker(
             *self.config.writer.logger.loss_names,
             "grad_norm",
-            *[m.name for m in self.metrics["train"]],
+            *[
+                m.name
+                for m in self.metrics["train"]
+                if not isinstance(m, EpochMetric)
+            ],
             writer=self.writer,
         )
         self.evaluation_metrics = MetricTracker(
             *self.config.writer.logger.loss_names,
-            *[m.name for m in self.metrics["inference"]],
+            *[
+                m.name
+                for m in self.metrics["inference"]
+                if not isinstance(m, EpochMetric)
+            ],
             writer=self.writer,
         )
 
@@ -328,6 +337,21 @@ class BaseTrainer:
             )
 
         results = self.evaluation_metrics.result()
+
+        for met in self.metrics["inference"]:
+            if isinstance(met, EpochMetric):
+                extra = met.finalize()
+                results.update(extra)
+                if self.writer is not None:
+                    self.writer.set_step(epoch * self.epoch_len, part)
+                    for k, v in extra.items():
+                        try:
+                            fv = float(v)
+                        except (TypeError, ValueError):
+                            continue
+                        if fv == fv:  # not NaN
+                            self.writer.add_scalar(k, fv)
+                met.reset()
 
         if (
             confusion_matrix_metric is not None
@@ -530,6 +554,7 @@ class BaseTrainer:
             "arch": arch,
             "epoch": epoch,
             "state_dict": self.model.state_dict(),
+            "criterion_state_dict": self.criterion.state_dict(),
             "optimizer": self.optimizer.state_dict(),
             "lr_scheduler": self.lr_scheduler.state_dict(),
             "monitor_best": self.mnt_best,
@@ -574,7 +599,10 @@ class BaseTrainer:
             )
         self.model.load_state_dict(checkpoint["state_dict"])
 
-        
+        csd = checkpoint.get("criterion_state_dict")
+        if csd is not None:
+            self.criterion.load_state_dict(csd)
+
         if (
             checkpoint["config"]["optimizer"] != self.config["optimizer"]
             or checkpoint["config"]["lr_scheduler"] != self.config["lr_scheduler"]

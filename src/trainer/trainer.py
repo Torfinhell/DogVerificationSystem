@@ -1,12 +1,25 @@
+import contextlib
+
 import torch
+from src.metrics.epoch_metric import EpochMetric
 from src.metrics.tracker import MetricTracker
 from src.trainer.base_trainer import BaseTrainer
+from src.utils.torch_utils import str_to_dtype
 
 
 class Trainer(BaseTrainer):
     """
     Trainer class. Defines the logic of batch logging and processing.
     """
+
+    def _maybe_autocast(self):
+        amp = self.config.trainer.get("amp") or {}
+        if not amp.get("enabled"):
+            return contextlib.nullcontext()
+        if torch.device(self.device).type != "cuda":
+            return contextlib.nullcontext()
+        dtype = str_to_dtype(amp.get("dtype", "bfloat16"))
+        return torch.autocast(device_type="cuda", dtype=dtype)
 
     def process_batch(self, batch, metrics: MetricTracker):
         """
@@ -34,11 +47,12 @@ class Trainer(BaseTrainer):
         if self.is_train:
             metric_funcs = self.metrics["train"]
             self.optimizer.zero_grad()
-        outputs = self.model(**batch)
-        batch.update(outputs)
+        with self._maybe_autocast():
+            outputs = self.model(**batch)
+            batch.update(outputs)
 
-        all_losses = self.criterion(**batch)
-        batch.update(all_losses)
+            all_losses = self.criterion(**batch)
+            batch.update(all_losses)
 
         if self.is_train:
             batch["loss"].backward()  # sum of all losses is always called loss
@@ -52,8 +66,7 @@ class Trainer(BaseTrainer):
             metrics.update(loss_name, batch[loss_name].item())
 
         for met in metric_funcs:
-            # Skip confusion matrix metric - it will be extracted in _evaluation_epoch
-            if met.name == "confusion_matrix":
+            if met.name == "confusion_matrix" or isinstance(met, EpochMetric):
                 met(**batch)
                 continue
 

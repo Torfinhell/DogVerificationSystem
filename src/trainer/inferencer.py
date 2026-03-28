@@ -1,6 +1,7 @@
 import torch
 from tqdm.auto import tqdm
 
+from src.metrics.epoch_metric import EpochMetric
 from src.metrics.tracker import MetricTracker
 from src.trainer.base_trainer import BaseTrainer
 
@@ -70,7 +71,11 @@ class Inferencer(BaseTrainer):
         self.metrics = metrics
         if self.metrics is not None:
             self.evaluation_metrics = MetricTracker(
-                *[m.name for m in self.metrics["inference"]],
+                *[
+                    m.name
+                    for m in self.metrics["inference"]
+                    if not isinstance(m, EpochMetric)
+                ],
                 writer=None,
             )
         else:
@@ -124,7 +129,14 @@ class Inferencer(BaseTrainer):
 
         if metrics is not None:
             for met in self.metrics["inference"]:
-                metrics.update(met.name, met(**batch))
+                if isinstance(met, EpochMetric):
+                    met(**batch)
+                    continue
+                met_value = met(**batch)
+                if met_value is not None:
+                    if isinstance(met_value, torch.Tensor) and met_value.numel() == 1:
+                        met_value = float(met_value.detach().cpu().item())
+                    metrics.update(met.name, float(met_value))
 
         # Some saving logic. This is an example
         # Use if you need to save predictions on disk
@@ -185,4 +197,9 @@ class Inferencer(BaseTrainer):
                     metrics=self.evaluation_metrics,
                 )
 
-        return self.evaluation_metrics.result()
+        results = self.evaluation_metrics.result()
+        for met in self.metrics["inference"]:
+            if isinstance(met, EpochMetric):
+                results.update(met.finalize())
+                met.reset()
+        return results
