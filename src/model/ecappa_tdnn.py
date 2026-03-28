@@ -30,9 +30,14 @@ class EcappaTDNN(nn.Module):
         Args:
             data_object (Tensor): input vector.
         Returns:
-            output (dict): output dict containing logits.
+            output (dict): output dict containing logits and embedding (before last linear).
         """
-        return {"logits": torch.mean(self.net(rearrange(extracted_feature, "b f t->b t f")), dim=1)}
+        h = torch.mean(rearrange(extracted_feature, "b f t->b t f"), dim=1)
+        for layer in list(self.net.children())[:-1]:
+            h = layer(h)
+        embedding = h
+        logits = self.net[-1](h)
+        return {"logits": logits, "embedding": embedding}
 
     def __str__(self):
         """

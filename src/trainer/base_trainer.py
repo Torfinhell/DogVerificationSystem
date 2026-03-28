@@ -1,4 +1,5 @@
 from abc import abstractmethod
+import contextlib
 
 import torch
 from numpy import inf
@@ -13,6 +14,8 @@ from hydra.utils import instantiate
 
 from src.datasets.collate import collate_fn
 from src.utils.init_utils import set_worker_seed
+from src.utils.hydra_cfg import cfg_get
+from src.utils.plot_utils import embedding_to_3d
 
 class BaseTrainer:
     """
@@ -122,7 +125,7 @@ class BaseTrainer:
 
         
         self.metrics = metrics
-        self.train_metrics = MetricTracker(
+        _train_metric_keys = (
             *self.config.writer.logger.loss_names,
             "grad_norm",
             *[
@@ -130,8 +133,12 @@ class BaseTrainer:
                 for m in self.metrics["train"]
                 if not isinstance(m, EpochMetric)
             ],
+        )
+        self.train_metrics = MetricTracker(
+            *_train_metric_keys,
             writer=self.writer,
         )
+        self.epoch_train_metrics = MetricTracker(*_train_metric_keys, writer=None)
         self.evaluation_metrics = MetricTracker(
             *self.config.writer.logger.loss_names,
             *[
@@ -154,6 +161,68 @@ class BaseTrainer:
 
         if config.trainer.get("from_pretrained") is not None:
             self._from_pretrained(config.trainer.get("from_pretrained"))
+
+    def _autocast(self):
+        """Trainer overrides with AMP autocast when enabled."""
+        return contextlib.nullcontext()
+
+    def _gather_embeddings(self, dataloader, max_samples: int, max_batches: int):
+        embs, labs = [], []
+        n = 0
+        self.model.eval()
+        with torch.no_grad():
+            for bi, batch in enumerate(dataloader):
+                if bi >= max_batches:
+                    break
+                batch = self.move_batch_to_device(batch)
+                batch = self.transform_batch(batch)
+                with self._autocast():
+                    out = self.model(**batch)
+                e = out.get("embedding")
+                if e is None:
+                    e = out["logits"]
+                emb = e.detach().cpu()
+                y = batch["labels"].detach().cpu()
+                embs.append(emb)
+                labs.append(y)
+                n += emb.shape[0]
+                if n >= max_samples:
+                    break
+        if not embs:
+            return None, None
+        emb = torch.cat(embs, dim=0)[:max_samples]
+        lab = torch.cat(labs, dim=0)[:max_samples]
+        pts = embedding_to_3d(emb)
+        return pts.numpy(), lab.numpy()
+
+    def _wandb_after_train_epoch(self, epoch, logs):
+        if self.writer is None:
+            return
+        if getattr(self.writer, "wandb", None) is None:
+            return
+        if hasattr(self.writer, "log_epoch_summary"):
+            self.writer.set_step(epoch * self.epoch_len, "epoch_end")
+            self.writer.log_epoch_summary(logs, epoch)
+        wcfg = self.config.get("writer")
+        if wcfg is None or not cfg_get(wcfg, "plot_3d", False):
+            return
+        max_s = cfg_get(wcfg, "embedding_max_samples", 2048)
+        max_b = cfg_get(wcfg, "embedding_max_batches", 64)
+        self.model.eval()
+        self.writer.set_step(epoch * self.epoch_len, "train")
+        e, y = self._gather_embeddings(self.train_dataloader_raw, max_s, max_b)
+        if e is not None:
+            self.writer.add_plot_3d(
+                "embedding_3d", e, y, title=f"train PCA epoch {epoch}"
+            )
+        for part, dl in self.evaluation_dataloaders.items():
+            self.writer.set_step(epoch * self.epoch_len, part)
+            e, y = self._gather_embeddings(dl, max_s, max_b)
+            if e is not None:
+                self.writer.add_plot_3d(
+                    "embedding_3d", e, y, title=f"{part} PCA epoch {epoch}"
+                )
+
     def update_train_dataloader(self, batch):
         batch_sampler = instantiate(
             self.config.batch_sampler.sampler,
@@ -198,7 +267,9 @@ class BaseTrainer:
         for epoch in range(self.start_epoch, self.epochs + 1):
             self._last_epoch = epoch
             result = self._train_epoch(epoch)
-            
+            # logging embeddings (PCA 3D) + W&B epoch_summary scalars
+            self._wandb_after_train_epoch(epoch, result)
+
             logs = {"epoch": epoch}
             logs.update(result)
 
@@ -232,8 +303,10 @@ class BaseTrainer:
         self.is_train = True
         self.model.train()
         self.train_metrics.reset()
-        self.writer.set_step((epoch - 1) * self.epoch_len)
-        self.writer.add_scalar("epoch", epoch)
+        self.epoch_train_metrics.reset()
+        if self.writer is not None:
+            self.writer.set_step((epoch - 1) * self.epoch_len)
+            self.writer.add_scalar("epoch", epoch)
         for batch_idx, batch in enumerate(
             tqdm(self.train_dataloader, desc="train", total=self.epoch_len)
         ):
@@ -241,6 +314,7 @@ class BaseTrainer:
                 batch = self.process_batch(
                     batch,
                     metrics=self.train_metrics,
+                    epoch_metrics=self.epoch_train_metrics,
                 )
             except torch.cuda.OutOfMemoryError as e:
                 if self.skip_oom:
@@ -251,28 +325,28 @@ class BaseTrainer:
                     raise e
 
             self.train_metrics.update("grad_norm", self._get_grad_norm())
+            self.epoch_train_metrics.update("grad_norm", self._get_grad_norm())
 
             
             if batch_idx % self.log_step == 0:
-                self.writer.set_step((epoch - 1) * self.epoch_len + batch_idx)
+                if self.writer is not None:
+                    self.writer.set_step((epoch - 1) * self.epoch_len + batch_idx)
                 self.logger.debug(
                     "Train Epoch: {} {} Loss: {:.6f}".format(
                         epoch, self._progress(batch_idx), batch["loss"].item()
                     )
                 )
-                self.writer.add_scalar(
-                    "learning rate", self.lr_scheduler.get_last_lr()[0]
-                )
-                self._log_scalars(self.train_metrics)
-                self._log_batch(batch_idx, batch)
-                
-                
-                last_train_metrics = self.train_metrics.result()
+                if self.writer is not None:
+                    self.writer.add_scalar(
+                        "learning rate", self.lr_scheduler.get_last_lr()[0]
+                    )
+                    self._log_scalars(self.train_metrics)
+                    self._log_batch(batch_idx, batch)
                 self.train_metrics.reset()
             if batch_idx + 1 >= self.epoch_len:
                 break
 
-        logs = last_train_metrics
+        logs = self.epoch_train_metrics.result()
 
         
         confusion_matrix = None
@@ -329,12 +403,14 @@ class BaseTrainer:
                     batch,
                     metrics=self.evaluation_metrics,
                 )
+                # One media sample per val epoch (first batch; order fixed when shuffle=False)
+                if self.writer is not None and batch_idx == 0:
+                    self.writer.set_step(epoch * self.epoch_len, part)
+                    self._log_batch(batch_idx, batch, part)
 
-            self.writer.set_step(epoch * self.epoch_len, part)
-            self._log_scalars(self.evaluation_metrics)
-            self._log_batch(
-                batch_idx, batch, part
-            )
+            if self.writer is not None:
+                self.writer.set_step(epoch * self.epoch_len, part)
+                self._log_scalars(self.evaluation_metrics)
 
         results = self.evaluation_metrics.result()
 
@@ -357,7 +433,6 @@ class BaseTrainer:
             confusion_matrix_metric is not None
             and hasattr(confusion_matrix_metric, "metric")
             and hasattr(confusion_matrix_metric.metric, "compute")
-            and self.config.get("batch_sampler", None) is not None
         ):
             confusion_matrix_data = confusion_matrix_metric.metric.compute()
             if isinstance(confusion_matrix_data, torch.Tensor):
@@ -365,6 +440,17 @@ class BaseTrainer:
             else:
                 results["confusion_matrix"] = confusion_matrix_data
             confusion_matrix_metric.metric.reset()
+            if (
+                self.writer is not None
+                and getattr(self.writer, "wandb", None) is not None
+                and cfg_get(self.config, "writer.log_confusion_matrix_image", True)
+                and hasattr(self.writer, "add_confusion_matrix_image")
+            ):
+                self.writer.add_confusion_matrix_image(
+                    "confusion_matrix",
+                    results["confusion_matrix"],
+                    title=f"{part} epoch {epoch}",
+                )
 
         return results
 

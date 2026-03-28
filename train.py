@@ -3,10 +3,10 @@ import warnings
 import hydra
 import torch
 from hydra.utils import instantiate
-from omegaconf import OmegaConf
 
 from src.datasets.data_utils import get_dataloaders
 from src.trainer import Trainer
+from src.utils.hydra_cfg import cfg_to_container
 from src.utils.init_utils import set_random_seed, setup_saving_and_logging
 from src.utils.optim_utils import instantiate_optimizer
 from src.utils.torch_utils import set_tf32_allowance
@@ -26,7 +26,7 @@ def main(config):
     """
     set_random_seed(config.trainer.seed)
 
-    project_config = OmegaConf.to_container(config)
+    project_config = cfg_to_container(config)
     logger = setup_saving_and_logging(config)
     writer = instantiate(config.writer.logger, logger, project_config)
 

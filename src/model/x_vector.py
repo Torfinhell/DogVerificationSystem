@@ -37,8 +37,10 @@ class XVectorModel(nn.Module):
             nn.Dropout(dropout)
         )
     def forward(self, extracted_feature, **batch):
-        x=extracted_feature
+        x = extracted_feature
         for layer in self.tdnns:
             x = layer(x)
         x = torch.cat([x.mean(dim=-1), x.std(dim=-1)], dim=1)
-        return {"logits":self.segment_layers(x)}
+        embedding = self.segment_layers[:-1](x)
+        logits = self.segment_layers[-1](embedding)
+        return {"logits": logits, "embedding": embedding}
