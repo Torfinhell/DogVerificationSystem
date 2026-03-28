@@ -15,14 +15,6 @@ train: # metrics that are calculated during training
     device: ${trainer.device}
     name: "TRAIN_MulticlassPrecision"
 
-  - _target_: src.metrics.ClassificationMetric
-    metric:
-      _target_: torchmetrics.classification.MulticlassRecall
-      num_classes: 60
-      average: "macro"
-    device: ${trainer.device}
-    name: "TRAIN_MulticlassRecall"
-
 inference: # metrics that are calculated during inference (eval)
   - _target_: src.metrics.ClassificationMetric
     metric:
@@ -39,14 +31,6 @@ inference: # metrics that are calculated during inference (eval)
       average: "macro"
     device: ${trainer.device}
     name: "MulticlassPrecision"
-
-  - _target_: src.metrics.ClassificationMetric
-    metric:
-      _target_: torchmetrics.classification.MulticlassRecall
-      num_classes: 60
-      average: "macro"
-    device: ${trainer.device}
-    name: "MulticlassRecall"
 
   - _target_: src.metrics.ConfusionMatrixMetric
     metric:
