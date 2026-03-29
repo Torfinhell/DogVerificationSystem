@@ -17,10 +17,12 @@ plt.switch_backend("agg")  # avoid RuntimeError: main thread is not in main loop
 
 
 def mel_forward(f: np.ndarray | float) -> np.ndarray | float:
+    """Hz → mel (Wikipedia-style)."""
     return 2595.0 * np.log10(1.0 + np.asarray(f) / 700.0)
 
 
 def mel_inverse(m: np.ndarray | float) -> np.ndarray | float:
+    """Mel → Hz."""
     return (10.0 ** (np.asarray(m) / 2595.0) - 1.0) * 700.0
 
 

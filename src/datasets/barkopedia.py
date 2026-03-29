@@ -11,6 +11,84 @@ from src.datasets.base_dataset import BaseDataset
 from src.utils.io_utils import ROOT_PATH
 
 
+def _dog_id_to_class_map_from_metadata_df(df: pd.DataFrame) -> dict[int, int]:
+    unique = sorted(int(x) for x in df["dog_id"].unique())
+    return {did: i for i, did in enumerate(unique)}
+
+
+def _mapping_payload(dog_id_to_class: dict[int, int]) -> dict:
+    inv = {cls: did for did, cls in dog_id_to_class.items()}
+    return {
+        "num_classes": len(dog_id_to_class),
+        "dog_id_to_class": {str(k): v for k, v in sorted(dog_id_to_class.items())},
+        "class_to_dog_id": {str(k): v for k, v in sorted(inv.items())},
+    }
+
+
+def _write_mapping_files(data_dir: Path, dog_id_to_class: dict[int, int]) -> None:
+    """Write canonical ``mapping.json`` and ``label_map.json`` (same content)."""
+    payload = _mapping_payload(dog_id_to_class)
+    for name in ("mapping.json", "label_map.json"):
+        path = Path(data_dir) / name
+        with path.open("w") as f:
+            json.dump(payload, f, indent=2)
+
+
+def _load_mapping_json(data_dir: Path) -> dict[int, int] | None:
+    path = Path(data_dir) / "mapping.json"
+    if not path.exists():
+        return None
+    with path.open() as f:
+        raw = json.load(f)
+    d = raw.get("dog_id_to_class", raw)
+    return {int(k): int(v) for k, v in d.items()}
+
+
+def read_num_classes_from_mapping(data_dir: Path | None = None) -> int:
+    """
+    Read ``num_classes`` from ``mapping.json`` (or ``label_map.json``) under the
+    Barkopedia data directory. Use this to align Hydra ``num_classes`` / model
+    ``n_class`` with the built indices.
+    """
+    if data_dir is None:
+        data_dir = ROOT_PATH / "data" / "datasets" / "barkopedia"
+    data_dir = Path(data_dir)
+    for name in ("mapping.json", "label_map.json"):
+        path = data_dir / name
+        if path.exists():
+            with path.open() as f:
+                data = json.load(f)
+            return int(data["num_classes"])
+    raise FileNotFoundError(
+        f"No mapping.json or label_map.json in {data_dir}. "
+        "Build the dataset once (BarkopediaDataset will create them)."
+    )
+
+
+def _resolve_dog_id_to_class(df: pd.DataFrame, data_dir: Path) -> dict[int, int]:
+    """
+    Build dog_id -> class index for all dog_ids in ``df``.
+
+    If ``mapping.json`` exists, reuse it and assign new consecutive indices only
+    for dog_ids that are not yet in the map (e.g. new speakers after a dataset update).
+    Otherwise enumerate sorted unique ``dog_id`` as 0..N-1.
+    """
+    unique_ids = sorted(int(x) for x in df["dog_id"].unique())
+    existing = _load_mapping_json(data_dir)
+    if existing is None:
+        dog_id_to_class = _dog_id_to_class_map_from_metadata_df(df)
+    else:
+        dog_id_to_class = {int(k): int(v) for k, v in existing.items()}
+        used_classes = set(dog_id_to_class.values())
+        next_cls = max(used_classes) + 1 if used_classes else 0
+        for did in unique_ids:
+            if did not in dog_id_to_class:
+                dog_id_to_class[did] = next_cls
+                used_classes.add(next_cls)
+                next_cls += 1
+    _write_mapping_files(data_dir, dog_id_to_class)
+    return dog_id_to_class
+
 
 class BarkopediaDataset(BaseDataset):
     """
@@ -27,6 +105,7 @@ class BarkopediaDataset(BaseDataset):
         part: str = "train",
         train_split: float = 0.9,
         data_dir: Path = None,
+        num_classes: int | None = None,
         *args,
         **kwargs,
     ):
@@ -37,6 +116,9 @@ class BarkopediaDataset(BaseDataset):
                 (the rest become validation). Ignored for test split.
             data_dir (Path, optional): root directory for the dataset.
                 Default: ROOT_PATH / "data" / "datasets" / "barkopedia"
+            num_classes (int | None): if set (e.g. from Hydra), train/val splits
+                assert this matches ``mapping.json`` and every index label lies in
+                ``[0, num_classes)``.
         """
         if part not in ["train", "val", "test"]:
             raise ValueError(f"Part must be 'train', 'val', or 'test', got '{part}'")
@@ -48,7 +130,22 @@ class BarkopediaDataset(BaseDataset):
         self._part = part
 
         index = self._get_or_load_index()
+        self._assert_num_classes(index, num_classes)
         super().__init__(index, *args, **kwargs)
+
+    def _assert_num_classes(self, index: list, num_classes: int | None) -> None:
+        if self._part not in ("train", "val") or num_classes is None:
+            return
+        mapping_nc = read_num_classes_from_mapping(self._data_dir)
+        assert mapping_nc == num_classes, (
+            f"Barkopedia {self._data_dir}/mapping.json num_classes={mapping_nc} "
+            f"does not match config num_classes={num_classes}"
+        )
+        for i, entry in enumerate(index):
+            li = int(entry["label"])
+            assert 0 <= li < num_classes, (
+                f"{self._part}_index.json entry {i}: label {li} not in [0, {num_classes})"
+            )
 
     def _get_or_load_index(self):
         """Load index from JSON if exists, otherwise create it."""
@@ -114,6 +211,13 @@ class BarkopediaDataset(BaseDataset):
         Build index for train or validation split.
         Uses the full training data (already downloaded) and filters
         by dog ID based on train_split.
+
+        Class indices are **global** (one index per dog_id across the full
+        training metadata). After sorting unique dog IDs, the train split uses
+        the first ``train_split`` fraction and val the rest, so validation
+        labels occupy only the **high** end of ``0 .. num_classes-1``. A
+        full confusion matrix on val therefore has empty rows for classes
+        that never appear in that split (expected; see also cropped CM logging).
         """
         train_dir = self._data_dir / "train"
         audio_dir = train_dir / "audio"
@@ -130,6 +234,8 @@ class BarkopediaDataset(BaseDataset):
                 "Please delete the 'train' folder in the dataset directory and rerun. "
                 f"Path: {train_dir}"
             )
+
+        dog_id_to_class = _resolve_dog_id_to_class(df, self._data_dir)
 
         dog_ids = sorted(df["dog_id"].unique())
         split_idx = int(len(dog_ids) * self._train_split)
@@ -165,10 +271,11 @@ class BarkopediaDataset(BaseDataset):
                 continue
             # -------------------------
 
+            dog_id = int(row["dog_id"])
             entry = {
                 "path": str(audio_path.absolute()),
                 "audio_len": float(row["duration"]),
-                "label": int(row["dog_id"])-1,   # FIX: use proper mapping later
+                "label": dog_id_to_class[dog_id],
             }
             index.append(entry)
         return index

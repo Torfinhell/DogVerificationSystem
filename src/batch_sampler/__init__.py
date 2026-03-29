@@ -1,1 +1,1 @@
-from .hpm import HPMBatchSampler
+from .hpm import HardPrototypeMiningBatchSampler

@@ -223,11 +223,12 @@ class BaseTrainer:
                     "embedding_3d", e, y, title=f"{part} PCA epoch {epoch}"
                 )
 
-    def update_train_dataloader(self, batch):
+    def update_train_dataloader(self):
+        similarity_matrix=(self.criterion.embedding.weight@self.criterion.embedding.weight.T)
         batch_sampler = instantiate(
             self.config.batch_sampler.sampler,
             ds=self.train_dataloader_raw.dataset,
-            **batch,
+            similarity_matrix=similarity_matrix
         )
 
         new_dataloader = instantiate(
@@ -349,15 +350,13 @@ class BaseTrainer:
         logs = self.epoch_train_metrics.result()
 
         
-        confusion_matrix = None
         for part, dataloader in self.evaluation_dataloaders.items():
             val_logs = self._evaluation_epoch(epoch, part, dataloader)
-            if "confusion_matrix" in val_logs and self.config.get("batch_sampler", None) is not None:
-                confusion_matrix = val_logs["confusion_matrix"]
+
             logs.update(**{f"{part}_{name}": value for name, value in val_logs.items() if name != "confusion_matrix"})
 
-        if self.config.get("batch_sampler", None) is not None and confusion_matrix is not None:
-            self.update_train_dataloader({"confusion_matrix": confusion_matrix})
+        if self.config.get("batch_sampler", None) is not None:
+            self.update_train_dataloader()
         self._reset_stateful_metrics()
 
         return logs
