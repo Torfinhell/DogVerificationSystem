@@ -1,6 +1,6 @@
 logger:
   _target_: src.logger.WandBWriter
-  project_name: "pytorch_template"
+  project_name: "DogVerificationSystem"
   entity: null
   run_name: "testing"
   mode: "offline"
