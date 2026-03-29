@@ -137,6 +137,8 @@ class DatasetCombine(Dataset):
         return self._num_classes
 
     def _write_map_json(self) -> None:
+        if self._map_path.exists():
+            return
         name_to_offset: dict[str, int] = {}
         local_to_global: dict[str, dict[str, int]] = {}
         for i, off in enumerate(self._offsets):
