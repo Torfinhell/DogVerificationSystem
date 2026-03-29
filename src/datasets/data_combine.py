@@ -39,7 +39,7 @@ def _set_label_on_sample(sample: dict, global_label: int) -> dict:
     return out
 
 
-class ConcatLabelMapDataset(Dataset):
+class DatasetCombine(Dataset):
     """
     Stack multiple datasets with independent local label spaces into one global
     ``0 .. num_classes-1`` space.
@@ -189,7 +189,7 @@ class ConcatLabelMapDataset(Dataset):
 
 
 def read_num_classes_from_concat_map(map_json_path: Path | str | None = None) -> int:
-    """Read ``num_classes`` from a ``concat_label_map.json`` written by :class:`ConcatLabelMapDataset`."""
+    """Read ``num_classes`` from a ``concat_label_map.json`` written by :class:`DatasetCombine`."""
     if map_json_path is None:
         map_json_path = ROOT_PATH / "data" / "datasets" / "concat_label_map.json"
     path = Path(map_json_path)
