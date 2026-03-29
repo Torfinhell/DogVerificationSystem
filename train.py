@@ -53,6 +53,8 @@ def main(config):
     metrics = instantiate(config.metrics)
 
     # optimizer: optional lr_loss for AAM-Softmax (etc.) vs model — see optim_utils
+    if(config.trainer.epoch_len is None):
+        config.trainer.epoch_len=len(dataloaders["train"].dataset)
     optimizer = instantiate_optimizer(config.optimizer, model, loss_function)
     lr_scheduler = instantiate(config.lr_scheduler, optimizer=optimizer)
 
