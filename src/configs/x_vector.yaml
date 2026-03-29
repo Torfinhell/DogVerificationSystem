@@ -7,6 +7,10 @@ defaults:
   - transforms: x_vector
   - batch_sampler: hpm
   - _self_
+
+# Must match ``num_classes`` in mapping.json / label_map.json after building indices.
+num_classes: 60
+
 optimizer:
   _target_: torch.optim.Adam
   lr: 3e-4
@@ -16,11 +20,16 @@ lr_scheduler:
   gamma: 0.9
   step_size: ${trainer.epoch_len}
 loss_function:
-  _target_: src.loss.SoftmaxLoss
+  _target_: src.loss.AAMSoftmaxLoss
+  embedding_dim: ${model.output_dim}
+  num_speakers: ${num_classes}
+  scale: 3
+  margin: 0.1
+  label_smoothing: 0.1
 trainer:
   log_step: 50
   n_epochs: 100
-  epoch_len: 500
+  epoch_len: 30
   device_tensors: ["extracted_feature", "labels"] # which tensors should be on device (ex. GPU)
   resume_from: null # null or path to the checkpoint dir with *.pth and config.yaml
   device: 'auto' # device name or "auto"

@@ -1,4 +1,4 @@
 _target_: src.model.BaselineModel
 n_feats: 128
 fc_hidden: 512
-n_class: 60
+n_class: ${num_classes}

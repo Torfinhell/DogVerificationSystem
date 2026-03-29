@@ -4,7 +4,6 @@ from hydra.utils import instantiate
 
 from src.datasets.collate import collate_fn
 from src.utils.init_utils import set_worker_seed
-from src.batch_sampler import HPMBatchSampler
 
 
 def inf_loop(dataloader):
@@ -85,5 +84,4 @@ def get_dataloaders(config, device):
         dataloader_kwargs["shuffle"] = (dataset_partition == "train")
         partition_dataloader = instantiate(config.dataloader.dataloader_standard, **dataloader_kwargs)
         dataloaders[dataset_partition] = partition_dataloader
-
     return dataloaders, batch_transforms

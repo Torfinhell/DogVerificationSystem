@@ -1,15 +1,27 @@
 train:
-  _target_: torch.utils.data.ConcatDataset # we can concat datasets if we want to
+  _target_: src.datasets.ConcatLabelMapDataset
   datasets:
     - _target_: src.datasets.BarkopediaDataset
       part: "train"
       train_split: 0.9
+      num_classes: ${num_classes}
       instance_transforms: ${transforms.instance_transforms.train}
+  num_local_classes:
+    - ${num_classes}
+  dataset_names:
+    - barkopedia
 val:
-  _target_: src.datasets.BarkopediaDataset
-  part: "val"
-  train_split: 0.9
-  instance_transforms: ${transforms.instance_transforms.inference}
+  _target_: src.datasets.ConcatLabelMapDataset
+  datasets:
+    - _target_: src.datasets.BarkopediaDataset
+      part: "val"
+      train_split: 0.9
+      num_classes: ${num_classes}
+      instance_transforms: ${transforms.instance_transforms.inference}
+  num_local_classes:
+    - ${num_classes}
+  dataset_names:
+    - barkopedia
 # test:
   # _target_: src.datasets.BarkopediaDataset
   # part: "test"
