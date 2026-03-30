@@ -1,4 +1,5 @@
 import json
+import random
 import shutil
 from pathlib import Path
 
@@ -96,29 +97,33 @@ class BarkopediaDataset(BaseDataset):
 
     Downloads from Hugging Face, saves audio files preserving their original format,
     and builds indexes (JSON) for train, validation, and test splits.
-    The train and validation splits are created by splitting dog IDs from the
-    original training set according to train_split.
+    The train and validation splits are created by splitting **each dog_id's samples**
+    according to train_split (instead of splitting whole dog IDs). If train_split is None,
+    all samples are assigned to the training split and the validation split is empty.
     """
 
     def __init__(
         self,
         part: str = "train",
-        train_split: float = 0.9,
+        train_split: float | None = 0.9,
         data_dir: Path = None,
         num_classes: int | None = None,
+        random_seed: int = 42,
         *args,
         **kwargs,
     ):
         """
         Args:
             part (str): partition name – "train", "val", or "test".
-            train_split (float): fraction of dog IDs to use for training
-                (the rest become validation). Ignored for test split.
+            train_split (float | None): fraction of each dog_id's samples to use for training
+                (the rest become validation). If None, all samples are used for training
+                and validation is empty. Ignored for test split.
             data_dir (Path, optional): root directory for the dataset.
                 Default: ROOT_PATH / "data" / "datasets" / "barkopedia"
             num_classes (int | None): if set (e.g. from Hydra), train/val splits
                 assert this matches ``mapping.json`` and every index label lies in
                 ``[0, num_classes)``.
+            random_seed (int): random seed used when splitting per dog_id.
         """
         if part not in ["train", "val", "test"]:
             raise ValueError(f"Part must be 'train', 'val', or 'test', got '{part}'")
@@ -128,6 +133,7 @@ class BarkopediaDataset(BaseDataset):
         self._data_dir = Path(data_dir)
         self._train_split = train_split
         self._part = part
+        self._random_seed = random_seed
 
         index = self._get_or_load_index()
         self._assert_num_classes(index, num_classes)
@@ -154,21 +160,88 @@ class BarkopediaDataset(BaseDataset):
             with index_path.open() as f:
                 index = json.load(f)
         else:
-            index = self._create_index()
-            with index_path.open("w") as f:
-                json.dump(index, f, indent=2)
+            if self._part in ("train", "val"):
+                self._build_train_val_indices()
+            else:
+                self._build_test_index()
+            with index_path.open() as f:
+                index = json.load(f)
         return index
 
-    def _create_index(self):
+    def _build_train_val_indices(self):
         """
-        Build index by scanning the local audio directory.
-        For train/val, we use the training data and filter by dog IDs.
-        For test, we use the test data directly.
+        Build and save both train and validation indices.
+        For each dog_id, its samples are split into train and val according to
+        train_split, using a deterministic random seed. If train_split is None,
+        all samples go to train and val is empty.
         """
-        if self._part == "test":
-            return self._build_test_index()
-        else:
-            return self._build_train_val_index()
+        train_dir = self._data_dir / "train"
+        audio_dir = train_dir / "audio"
+        metadata_path = train_dir / "metadata.csv"
+
+        if not audio_dir.exists() or not metadata_path.exists():
+            self._download_split("train", train_dir)
+
+        df = pd.read_csv(metadata_path)
+
+        if "dog_id" not in df.columns:
+            raise RuntimeError(
+                "The metadata.csv for the train split does not contain 'dog_id'. "
+                "Please delete the 'train' folder in the dataset directory and rerun. "
+                f"Path: {train_dir}"
+            )
+        dog_id_to_class = _resolve_dog_id_to_class(df, self._data_dir)
+        train_entries = []
+        val_entries = []
+        rng = random.Random(self._random_seed)
+        for dog_id, group in df.groupby("dog_id"):
+            indices = list(group.index)
+            rng.shuffle(indices)
+
+            if self._train_split is None:
+                split_idx = len(indices)
+            else:
+                split_idx = int(len(indices) * self._train_split)
+
+            train_indices = indices[:split_idx]
+            val_indices = indices[split_idx:]
+
+            for idx_list, target_list in ((train_indices, train_entries),
+                                          (val_indices, val_entries)):
+                for idx in idx_list:
+                    row = group.loc[idx]
+                    audio_path = audio_dir / row["filename"]
+
+    
+                    if not audio_path.exists():
+                        print(f"Warning: file {audio_path} missing, skipping")
+                        continue
+                    if audio_path.stat().st_size == 0:
+                        print(f"Warning: empty file {audio_path}, skipping")
+                        continue
+                    try:
+                        with sf.SoundFile(audio_path) as f:
+                            if f.frames == 0:
+                                print(f"Warning: file {audio_path} has zero frames, skipping")
+                                continue
+                    except Exception as e:
+                        print(f"Warning: corrupt file {audio_path}: {e}, skipping")
+                        continue
+
+                    entry = {
+                        "path": str(audio_path.absolute()),
+                        "audio_len": float(row["duration"]),
+                        "label": dog_id_to_class[dog_id],
+                    }
+                    target_list.append(entry)
+        train_path = self._data_dir / "train_index.json"
+        val_path = self._data_dir / "val_index.json"
+        with open(train_path, "w") as f:
+            json.dump(train_entries, f, indent=2)
+        with open(val_path, "w") as f:
+            json.dump(val_entries, f, indent=2)
+        print(f"Saved train index ({len(train_entries)} entries) to {train_path}")
+        print(f"Saved val index ({len(val_entries)} entries) to {val_path}")
 
     def _build_test_index(self):
         """Build index for the test split."""
@@ -206,80 +279,6 @@ class BarkopediaDataset(BaseDataset):
             index.append(entry)
         return index
 
-    def _build_train_val_index(self):
-        """
-        Build index for train or validation split.
-        Uses the full training data (already downloaded) and filters
-        by dog ID based on train_split.
-
-        Class indices are **global** (one index per dog_id across the full
-        training metadata). After sorting unique dog IDs, the train split uses
-        the first ``train_split`` fraction and val the rest, so validation
-        labels occupy only the **high** end of ``0 .. num_classes-1``. A
-        full confusion matrix on val therefore has empty rows for classes
-        that never appear in that split (expected; see also cropped CM logging).
-        """
-        train_dir = self._data_dir / "train"
-        audio_dir = train_dir / "audio"
-        metadata_path = train_dir / "metadata.csv"
-
-        if not audio_dir.exists() or not metadata_path.exists():
-            self._download_split("train", train_dir)
-
-        df = pd.read_csv(metadata_path)
-
-        if "dog_id" not in df.columns:
-            raise RuntimeError(
-                "The metadata.csv for the train split does not contain 'dog_id'. "
-                "Please delete the 'train' folder in the dataset directory and rerun. "
-                f"Path: {train_dir}"
-            )
-
-        dog_id_to_class = _resolve_dog_id_to_class(df, self._data_dir)
-
-        dog_ids = sorted(df["dog_id"].unique())
-        split_idx = int(len(dog_ids) * self._train_split)
-        if self._part == "train":
-            selected_dog_ids = set(dog_ids[:split_idx])
-        else:
-            selected_dog_ids = set(dog_ids[split_idx:])
-
-        df_filtered = df[df["dog_id"].isin(selected_dog_ids)]
-
-        index = []
-        for _, row in tqdm(
-            df_filtered.iterrows(),
-            desc=f"Building {self._part} index",
-            total=len(df_filtered),
-        ):
-            audio_path = audio_dir / row["filename"]
-
-            # ---- File validation ----
-            if not audio_path.exists():
-                print(f"Warning: file {audio_path} missing, skipping")
-                continue
-            if audio_path.stat().st_size == 0:
-                print(f"Warning: empty file {audio_path}, skipping")
-                continue
-            try:
-                with sf.SoundFile(audio_path) as f:
-                    if f.frames == 0:
-                        print(f"Warning: file {audio_path} has zero frames, skipping")
-                        continue
-            except Exception as e:
-                print(f"Warning: corrupt file {audio_path}: {e}, skipping")
-                continue
-            # -------------------------
-
-            dog_id = int(row["dog_id"])
-            entry = {
-                "path": str(audio_path.absolute()),
-                "audio_len": float(row["duration"]),
-                "label": dog_id_to_class[dog_id],
-            }
-            index.append(entry)
-        return index
-
     def _download_split(self, split: str, target_dir: Path):
         """
         Download a specific split ('train' or 'test') from Hugging Face,
@@ -302,14 +301,12 @@ class BarkopediaDataset(BaseDataset):
             audio_info = item["audio"]
             src_path = audio_info["path"]
 
-
             audio_id = item.get("audio_id", Path(src_path).stem)
             original_ext = Path(src_path).suffix
             filename = f"{audio_id}{original_ext}"
 
             dst_path = audio_dir / filename
             shutil.copy2(src_path, dst_path)
-
 
             info = sf.info(src_path)
             duration = info.duration

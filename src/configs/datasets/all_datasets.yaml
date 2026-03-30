@@ -1,0 +1,42 @@
+train:
+  _target_: src.datasets.DatasetCombine
+  datasets:
+    - _target_: src.datasets.BarkopediaDataset
+      part: train
+      train_split: 0.9
+      num_classes: ${num_classes}
+      instance_transforms: ${transforms.instance_transforms.train}
+
+    - _target_: src.datasets.Dog2VecDataset
+      part: train
+      train_split: 0.8
+
+  num_local_classes:
+    - ${num_classes}
+    - 6   # number of breeds
+
+  dataset_names:
+    - barkopedia
+    - dog2vec
+
+
+val:
+  _target_: src.datasets.DatasetCombine
+  datasets:
+    - _target_: src.datasets.BarkopediaDataset
+      part: val
+      train_split: 0.9
+      num_classes: ${num_classes}
+      instance_transforms: ${transforms.instance_transforms.inference}
+
+    - _target_: src.datasets.Dog2VecDataset
+      part: val
+      train_split: 0.8
+
+  num_local_classes:
+    - ${num_classes}
+    - 6
+
+  dataset_names:
+    - barkopedia
+    - dog2vec

@@ -10,7 +10,7 @@ defaults:
 
 # Must match ``num_classes`` in mapping.json / label_map.json after building indices.
 num_classes: 60
-
+yandex_token: null
 optimizer:
   _target_: torch.optim.Adam
   lr: 3e-4
@@ -29,7 +29,7 @@ loss_function:
 trainer:
   log_step: 50
   n_epochs: 100
-  epoch_len: null
+  epoch_len: 300
   device_tensors: ["extracted_feature", "labels"] # which tensors should be on device (ex. GPU)
   resume_from: null # null or path to the checkpoint dir with *.pth and config.yaml
   device: 'auto' # device name or "auto"
