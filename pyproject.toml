@@ -18,4 +18,6 @@ dependencies = [
     "torchmetrics>=1.4.0",
     "tqdm>=4.66.0",
     "wandb>=0.16.0",
+    "yadisk>=3.4.0",
+    "pytubefix>=10.3.8",
 ]

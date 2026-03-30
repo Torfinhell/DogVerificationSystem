@@ -115,3 +115,4 @@ __MACOSX/
 uv.lock
 dog2vec_dataset
 *.zip
+experiments

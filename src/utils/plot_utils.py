@@ -28,9 +28,7 @@ def mel_inverse(m: np.ndarray | float) -> np.ndarray | float:
 
 def feature_plot_params_from_config(config: Any) -> dict[str, Any]:
     """
-    Read ``transforms.instance_transforms.{train,inference}.get_feature`` and return
-    parameters for logging **either** a mel spectrogram (torchaudio MelSpectrogram)
-    **or** MFCCs (``MfccExtractor`` / ``mfcc`` in target).
+    Return parameters for logging either a mel spectrogram or MFCCs 
 
     Returns:
         dict with ``kind`` ``\"mel\"`` or ``\"mfcc\"`` plus hop / rate / band counts.
