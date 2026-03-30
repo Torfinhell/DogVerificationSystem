@@ -1,6 +1,6 @@
 from pathlib import Path
 import json
-from .data_utils import youtube__download
+from .data_utils import youtube_download
 from .data_utils import FILEDownloader, CsvChunkDownloader
 import pandas as pd
 from collections import defaultdict
