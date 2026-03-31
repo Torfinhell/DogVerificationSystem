@@ -23,7 +23,7 @@ class BaselineModel(nn.Module):
             nn.ReLU(),
             nn.Linear(in_features=fc_hidden, out_features=n_class),
         )
-    def forward(self, extracted_feature, **batch):
+    def forward(self, spectral_feat, **batch):
         """
         Model forward method.
 
@@ -32,7 +32,7 @@ class BaselineModel(nn.Module):
         Returns:
             output (dict): output dict containing logits and embedding (before last linear).
         """
-        h = torch.mean(rearrange(extracted_feature, "b f t->b t f"), dim=1)
+        h = torch.mean(rearrange(spectral_feat, "b f t->b t f"), dim=1)
         for layer in list(self.net.children())[:-1]:
             h = layer(h)
         embedding = h

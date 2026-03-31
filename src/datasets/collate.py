@@ -22,7 +22,7 @@ def collate_fn(dataset_items: list[dict]):
 
         if key == "audio":
             batch[key] = pad_sequence(values, batch_first=True)
-        elif key == "extracted_feature":
+        elif key == "spectral_feat":
             transposed = [v.T for v in values] 
             padded = pad_sequence(transposed, batch_first=True)  
             batch[key] = padded.permute(0, 2, 1)  
