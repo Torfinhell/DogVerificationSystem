@@ -33,9 +33,9 @@ def feature_plot_params_from_config(config: Any) -> dict[str, Any]:
     Returns:
         dict with ``kind`` ``\"mel\"`` or ``\"mfcc\"`` plus hop / rate / band counts.
     """
-    raw = cfg_get(config, "transforms.instance_transforms.train.get_feature")
+    raw = cfg_get(config, "transforms.instance_transforms.train.get_spectral_feat")
     if raw is None:
-        raw = cfg_get(config, "transforms.instance_transforms.inference.get_feature")
+        raw = cfg_get(config, "transforms.instance_transforms.inference.get_spectral_feat")
     if raw is None:
         return {
             "kind": "mel",

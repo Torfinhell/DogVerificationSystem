@@ -150,8 +150,8 @@ class Trainer(BaseTrainer):
                 sample_rate=self._log_batch_sample_rate(batch),
             )
 
-        if "extracted_feature" in batch:
-            feat = batch["extracted_feature"][0]
+        if "spectral_feat" in batch:
+            feat = batch["spectral_feat"][0]
             params = feature_plot_params_from_config(self.config)
             if params.get("kind") == "mfcc":
                 img = plot_mfcc_coeffs(feat, params, title="MFCC")

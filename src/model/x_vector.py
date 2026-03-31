@@ -36,8 +36,8 @@ class XVectorModel(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout)
         )
-    def forward(self, extracted_feature, **batch):
-        x = extracted_feature
+    def forward(self, spectral_feat, **batch):
+        x = spectral_feat
         for layer in self.tdnns:
             x = layer(x)
         x = torch.cat([x.mean(dim=-1), x.std(dim=-1)], dim=1)

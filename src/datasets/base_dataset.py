@@ -68,9 +68,9 @@ class BaseDataset(Dataset):
             audio = audio.squeeze(0)
         instance_data = {"audio": audio, "labels": data_dict["label"], "sample_rate":sr}
         instance_data = self.preprocess_data(instance_data)
-        if "get_feature" in self.instance_transforms:
-            extracted_feature=self.instance_transforms["get_feature"](instance_data["audio"])
-            instance_data.update(self.preprocess_data({"extracted_feature":extracted_feature}))
+        if "get_spectral_feat" in self.instance_transforms:
+            spectral_feat=self.instance_transforms["get_spectral_feat"](instance_data["audio"])
+            instance_data.update(self.preprocess_data({"spectral_feat":spectral_feat}))
         return instance_data
 
     def __len__(self):
@@ -95,7 +95,7 @@ class BaseDataset(Dataset):
         """
         if self.instance_transforms is not None:
             for transform_name, transform_func in self.instance_transforms.items():
-                if transform_func is not None and transform_name != "get_feature" and transform_name in instance_data:
+                if transform_func is not None and transform_name != "get_spectral_feat" and transform_name in instance_data:
                     instance_data[transform_name] = transform_func(instance_data[transform_name])
         return instance_data
 

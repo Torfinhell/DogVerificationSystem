@@ -1,10 +1,10 @@
 defaults:
-  - model: x_vector
+  - model: ecappa_tdnn
   - writer: wandb
   - metrics: basic
   - datasets: barkopedia
   - dataloader: basic
-  - transforms: x_vector
+  - transforms: ecappa_tdnn
   - batch_sampler: hpm
   - _self_
 
