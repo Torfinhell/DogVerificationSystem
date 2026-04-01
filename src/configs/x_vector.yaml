@@ -5,7 +5,7 @@ defaults:
   - datasets: barkopedia
   - dataloader: basic
   - transforms: x_vector
-  - batch_sampler: null
+  - batch_sampler: hpm
   - backends: cos  # Choose backend: cos, plda
   - _self_
 sample_rate: 16000
