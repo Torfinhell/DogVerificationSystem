@@ -25,6 +25,7 @@ class Inferencer(BaseTrainer):
         metrics=None,
         batch_transforms=None,
         skip_model_load=False,
+        backend=None,
     ):
         """
         Initialize the Inferencer.
@@ -47,6 +48,8 @@ class Inferencer(BaseTrainer):
                 pre-trained checkpoint path. Set this argument to True if
                 the model desirable weights are defined outside of the
                 Inferencer Class.
+            backend (nn.Module | None): backend for computing similarity scores
+                from embeddings (e.g., CosineBackend, PLDABackend).
         """
         assert (
             skip_model_load or config.inferencer.get("from_pretrained") is not None
@@ -59,6 +62,7 @@ class Inferencer(BaseTrainer):
 
         self.model = model
         self.batch_transforms = batch_transforms
+        self.backend = backend
 
         # define dataloaders
         self.evaluation_dataloaders = {k: v for k, v in dataloaders.items()}
@@ -126,6 +130,20 @@ class Inferencer(BaseTrainer):
 
         outputs = self.model(**batch)
         batch.update(outputs)
+
+        # Compute backend scores if backend is available and embeddings exist
+        if "embedding" in batch:
+            embeddings = batch["embedding"]
+            # Always compute cosine scores for comparison
+            import torch.nn.functional as F
+            embeddings_norm = F.normalize(embeddings, p=2, dim=1)
+            cos_scores = torch.mm(embeddings_norm, embeddings_norm.t())
+            batch["cos_scores"] = cos_scores
+            
+            # Compute backend scores if backend is available
+            if self.backend is not None:
+                batch_scores = self.backend(embeddings, embeddings)
+                batch["backend_scores"] = batch_scores
 
         if metrics is not None:
             for met in self.metrics["inference"]:

@@ -250,16 +250,6 @@ class WandBWriter:
             {oname: self._mutable_tables[oname]},
             step=self.step,
         )
-
-    def add_images(self, image_names, images):
-        raise NotImplementedError()
-
-    def add_pr_curve(self, curve_name, curve):
-        raise NotImplementedError()
-
-    def add_embedding(self, embedding_name, embedding):
-        raise NotImplementedError()
-
     def log_epoch_summary(self, logs_dict: dict, epoch: int):
         """
         Log every numeric value in ``logs_dict`` under ``epoch_summary/<key>`` for W&B charts.

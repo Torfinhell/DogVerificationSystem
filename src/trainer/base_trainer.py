@@ -37,6 +37,7 @@ class BaseTrainer:
         epoch_len=None,
         skip_oom=True,
         batch_transforms=None,
+        backend=None,
     ):
         """
         Args:
@@ -61,6 +62,8 @@ class BaseTrainer:
             batch_transforms (dict[Callable] | None): transforms that
                 should be applied on the whole batch. Depend on the
                 tensor name.
+            backend (nn.Module | None): backend for computing similarity scores
+                during evaluation/inference (e.g., CosineBackend, PLDABackend).
         """
         self.is_train = True
 
@@ -78,6 +81,7 @@ class BaseTrainer:
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
         self.batch_transforms = batch_transforms
+        self.backend = backend
 
         
         self.train_dataloader_raw = dataloaders["train"]
@@ -195,6 +199,56 @@ class BaseTrainer:
         pts = embedding_to_3d(emb)
         return pts.numpy(), lab.numpy()
 
+    def _fit_backend_after_epoch(self):
+        """
+        Fit the backend (e.g., PLDA) on all training embeddings after an epoch.
+        
+        This method should be called after each training epoch to update the
+        backend model with the latest embeddings from the training set.
+        """
+        if self.backend is None or not hasattr(self.backend, "fit"):
+            return
+        
+        # Collect all embeddings from training dataloader
+        embeddings_list = []
+        labels_list = []
+        
+        self.model.eval()
+        with torch.no_grad():
+            for batch in tqdm(
+                self.train_dataloader_raw,
+                desc="Collecting embeddings for backend",
+                total=len(self.train_dataloader_raw),
+            ):
+                batch = self.move_batch_to_device(batch)
+                batch = self.transform_batch(batch)
+                with self._autocast():
+                    out = self.model(**batch)
+                
+                # Extract embeddings
+                emb = out.get("embedding")
+                if emb is None:
+                    emb = out.get("logits")
+                
+                if emb is not None:
+                    embeddings_list.append(emb.detach().cpu())
+                    labels_list.append(batch["labels"].detach().cpu())
+        
+        if not embeddings_list:
+            self.logger.warning("No embeddings collected for backend fitting")
+            return
+        
+        # Concatenate all embeddings and labels
+        all_embeddings = torch.cat(embeddings_list, dim=0)
+        all_labels = torch.cat(labels_list, dim=0) if labels_list else None
+        
+        # Fit the backend
+        try:
+            self.backend.fit(all_embeddings.to(self.device), labels=all_labels)
+            self.logger.info(f"Backend {self.backend.__class__.__name__} fitted on {all_embeddings.shape[0]} embeddings")
+        except Exception as e:
+            self.logger.error(f"Error fitting backend: {e}")
+
     def _wandb_after_train_epoch(self, epoch, logs):
         if self.writer is None:
             return
@@ -268,6 +322,10 @@ class BaseTrainer:
         for epoch in range(self.start_epoch, self.epochs + 1):
             self._last_epoch = epoch
             result = self._train_epoch(epoch)
+            
+            # Fit backend (e.g., PLDA) on all training embeddings after epoch
+            self._fit_backend_after_epoch()
+            
             # logging embeddings (PCA 3D) + W&B epoch_summary scalars
             self._wandb_after_train_epoch(epoch, result)
 

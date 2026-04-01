@@ -13,6 +13,8 @@ from src.utils.plot_utils import (
 from src.metrics.tracker import MetricTracker
 from src.trainer.base_trainer import BaseTrainer
 from src.utils.torch_utils import str_to_dtype
+import torch.nn.functional as F
+
 
 
 class Trainer(BaseTrainer):
@@ -68,9 +70,17 @@ class Trainer(BaseTrainer):
 
             all_losses = self.criterion(**batch)
             batch.update(all_losses)
+        if not self.is_train and "embedding" in batch:
+            embeddings = batch["embedding"]
+            embeddings_norm = F.normalize(embeddings, p=2, dim=1)
+            cos_scores = torch.mm(embeddings_norm, embeddings_norm.t())
+            batch["cos_scores"] = cos_scores
+            if self.backend is not None:
+                batch_scores = self.backend(embeddings, embeddings)
+                batch["backend_scores"] = batch_scores
 
         if self.is_train:
-            batch["loss"].backward()  # sum of all losses is always called loss
+            batch["loss"].backward() 
             self._clip_grad_norm()
             self.optimizer.step()
             if self.lr_scheduler is not None:
@@ -94,7 +104,6 @@ class Trainer(BaseTrainer):
                 if met_value.numel() == 1:
                     met_value = float(met_value.detach().cpu().item())
                 else:
-                    # non-scalar metric - skip metric tracker
                     continue
 
             if isinstance(met_value, (float, int)) and not (isinstance(met_value, float) and (met_value != met_value)):  # Check for NaN
@@ -144,14 +153,24 @@ class Trainer(BaseTrainer):
             return
 
         if "audio" in batch:
+            audio_sample = batch["audio"][0]
+            if "audio_lengths" in batch:
+                original_length = batch["audio_lengths"][0].item()
+                audio_sample = audio_sample[:original_length]
+            
             self.writer.add_audio(
                 "audio_sample",
-                batch["audio"][0],
+                audio_sample,
                 sample_rate=self._log_batch_sample_rate(batch),
             )
 
         if "spectral_feat" in batch:
             feat = batch["spectral_feat"][0]
+            if "spectral_feat_lengths" in batch:
+                original_length = batch["spectral_feat_lengths"][0].item()
+                if feat.dim() == 2 and feat.shape[1] > original_length:
+                    feat = feat[:, :original_length]
+            
             params = feature_plot_params_from_config(self.config)
             if params.get("kind") == "mfcc":
                 img = plot_mfcc_coeffs(feat, params, title="MFCC")

@@ -1,12 +1,14 @@
 train:
+  audio:  # Resample audio to target sample rate first
+    _target_: src.transforms.ResampleTransform
+    target_sample_rate: ${sample_rate}
   get_spectral_feat: # special key for getting spectral_feat
     _target_: torchaudio.transforms.MelSpectrogram
-    sample_rate: 16000
-  audio: null # name of the tensor on which we apply transform
-    # _target_: torchvision.transforms.v2.Compose
-    # transforms:
-    #   - _target_: src.transforms.wav_augs.Gain
+    sample_rate: ${sample_rate}
 inference:
+  audio:  # Resample audio to target sample rate first
+    _target_: src.transforms.ResampleTransform
+    target_sample_rate: ${sample_rate}
   get_spectral_feat:
     _target_: torchaudio.transforms.MelSpectrogram
-    sample_rate: 16000
+    sample_rate: ${sample_rate}

@@ -116,3 +116,6 @@ uv.lock
 dog2vec_dataset
 *.zip
 experiments
+pretrained_models
+*.gpg
+augmentation_datasets

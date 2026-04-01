@@ -3,10 +3,13 @@ import random
 import shutil
 from pathlib import Path
 
+import torch
+import torchaudio
 import pandas as pd
 import soundfile as sf
-from datasets import Audio, load_dataset
+from huggingface_hub import snapshot_download
 from tqdm.auto import tqdm
+import os
 
 from src.datasets.base_dataset import BaseDataset
 from src.utils.io_utils import ROOT_PATH
@@ -109,6 +112,7 @@ class BarkopediaDataset(BaseDataset):
         data_dir: Path = None,
         num_classes: int | None = None,
         random_seed: int = 42,
+        sample_rate: int = 16000,
         *args,
         **kwargs,
     ):
@@ -134,6 +138,7 @@ class BarkopediaDataset(BaseDataset):
         self._train_split = train_split
         self._part = part
         self._random_seed = random_seed
+        self.sample_rate = sample_rate
 
         index = self._get_or_load_index()
         self._assert_num_classes(index, num_classes)
@@ -281,47 +286,65 @@ class BarkopediaDataset(BaseDataset):
 
     def _download_split(self, split: str, target_dir: Path):
         """
-        Download a specific split ('train' or 'test') from Hugging Face,
+        Download a specific split ('train' or 'test') from Hugging Face using snapshot_download,
         copy all audio files (preserving original extensions) and create metadata.csv.
         For the train split, extracts dog ID from the parent folder name of the original file.
         """
-        print(f"Downloading split '{split}' from Hugging Face...")
-        dataset = load_dataset(
-            "ArlingtonCL2/Barkopedia_Individual_Dog_Recognition_Dataset",
-            split=split,
-            trust_remote_code=True,
+        print(f"Downloading split '{split}' from Hugging Face via snapshot_download...")
+        token = os.environ.get("HF_TOKEN", None)
+        temp_dir = target_dir / "temp_download"
+        
+        snapshot_download(
+            repo_id="ArlingtonCL2/Barkopedia_Individual_Dog_Recognition_Dataset",
+            repo_type="dataset",
+            local_dir=str(temp_dir),
+            local_dir_use_symlinks=False,
+            token=token,
+            max_workers=1,
+            ignore_patterns=["*.parquet", "*.json", "*.csv", "*.txt", "*.md", "*.yaml"],
         )
-        dataset = dataset.cast_column("audio", Audio(decode=False))
-
+        
         audio_dir = target_dir / "audio"
         audio_dir.mkdir(exist_ok=True, parents=True)
 
         metadata = []
-        for item in tqdm(dataset, desc=f"Saving {split} audio"):
-            audio_info = item["audio"]
-            src_path = audio_info["path"]
-
-            audio_id = item.get("audio_id", Path(src_path).stem)
-            original_ext = Path(src_path).suffix
-            filename = f"{audio_id}{original_ext}"
-
-            dst_path = audio_dir / filename
-            shutil.copy2(src_path, dst_path)
-
-            info = sf.info(src_path)
-            duration = info.duration
-
-            row = {
-                "audio_id": audio_id,
-                "filename": filename,
-                "duration": duration,
-            }
-            if split == "train":
-                dog_id = int(Path(src_path).parent.name)
-                row["dog_id"] = dog_id
-
-            metadata.append(row)
-
+        split_temp = temp_dir / split
+        if split_temp.exists():
+            search_dir = split_temp
+        else:
+            search_dir = temp_dir
+        
+        for audio_path in tqdm(sorted(search_dir.glob("**/*.wav")) + sorted(search_dir.glob("**/*.mp3")) + sorted(search_dir.glob("**/*.flac")), desc=f"Processing {split} audio"):
+            try:
+                audio_id = audio_path.stem
+                original_ext = audio_path.suffix
+                filename = f"{audio_id}{original_ext}"
+                
+                dst_path = audio_dir / filename
+                shutil.copy2(audio_path, dst_path)
+                
+                info = sf.info(str(audio_path))
+                duration = info.duration
+                
+                row = {
+                    "audio_id": audio_id,
+                    "filename": filename,
+                    "duration": duration,
+                }
+                if split == "train":
+                    try:
+                        dog_id = int(audio_path.parent.name)
+                        row["dog_id"] = dog_id
+                    except (ValueError, IndexError):
+                        print(f"Warning: could not extract dog_id from {audio_path}, skipping")
+                        dst_path.unlink()  
+                        continue
+                
+                metadata.append(row)
+            except Exception as e:
+                print(f"Warning: error processing {audio_path}: {e}, skipping")
+                continue
+        shutil.rmtree(temp_dir, ignore_errors=True)
         df = pd.DataFrame(metadata)
         csv_path = target_dir / "metadata.csv"
         df.to_csv(csv_path, index=False)
