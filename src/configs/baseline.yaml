@@ -12,7 +12,7 @@ defaults:
 num_classes: 60
 
 # Audio sample rate for all processing
-sample_rate: 16000
+sample_rate: 8000
 
 optimizer:
   _target_: torch.optim.Adam

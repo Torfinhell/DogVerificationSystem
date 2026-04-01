@@ -10,7 +10,7 @@ defaults:
   - _self_
 
 # Must match ``num_classes`` in mapping.json / label_map.json after building indices.
-sample_rate: 16000
+sample_rate: 80000
 num_classes: 60
 yandex_token: null
 optimizer:
