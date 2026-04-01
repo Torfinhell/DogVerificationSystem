@@ -107,8 +107,3 @@ uv run -- python train.py --config-name ecappa_tdnn \
   trainer.amp.dtype=float16 \
   trainer.save_dir=saved/best_ecappa_tdnn
 ```
-
-## Notes
-- For PLDA ablation, the existing EER metric now automatically computes verification EER from scores when available (backend_scores or cos_scores), falling back to classification EER from logits otherwise.
-- Update the final run with actual best hyperparameters from ablation results.
-- All runs use ECAPA-TDNN model and Barkopedia dataset.

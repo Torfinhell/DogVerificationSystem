@@ -22,4 +22,5 @@ dependencies = [
     "pytubefix>=10.3.8",
     "speechbrain>=1.1.0",
     "torchcodec>=0.11.0",
+    "kagglehub>=1.0.0",
 ]
