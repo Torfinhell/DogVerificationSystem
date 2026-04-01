@@ -1,8 +1,16 @@
 import kagglehub
 import shutil
 import os
-downloaded_path = kagglehub.dataset_download("nikitasolonitsyn/barkopedia")
+
+cached_path = kagglehub.dataset_download("nikitasolonitsyn/barkopedia")
 target_path = "."
-if not os.path.exists(target_path):
-    shutil.copytree(downloaded_path, target_path)
-print("Dataset available at:", target_path)
+os.makedirs(target_path, exist_ok=True)
+for item in os.listdir(cached_path):
+    src = os.path.join(cached_path, item)
+    dst = os.path.join(target_path, item)
+    if os.path.isdir(src):
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+    else:
+        shutil.copy2(src, dst)
+
+print(f"Dataset available at: {target_path}")

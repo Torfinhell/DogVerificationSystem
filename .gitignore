@@ -119,3 +119,4 @@ experiments
 pretrained_models
 *.gpg
 augmentation_datasets
+pretrained_models
