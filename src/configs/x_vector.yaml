@@ -8,7 +8,7 @@ defaults:
   - batch_sampler: hpm
   - backends: cos  # Choose backend: cos, plda
   - _self_
-sample_rate: 16000
+sample_rate: 800
 # Must match ``num_classes`` in mapping.json / label_map.json after building indices.
 num_classes: 60
 yandex_token: null
