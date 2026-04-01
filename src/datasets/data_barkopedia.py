@@ -176,9 +176,9 @@ class BarkopediaDataset(BaseDataset):
     def _build_train_val_indices(self):
         """
         Build and save both train and validation indices.
-        For each dog_id, its samples are split into train and val according to
-        train_split, using a deterministic random seed. If train_split is None,
-        all samples go to train and val is empty.
+        Dog IDs are split into train and val sets according to train_split.
+        All samples from train dog IDs go to train, all from val dog IDs go to val.
+        If train_split is None, all samples go to train and val is empty.
         """
         train_dir = self._data_dir / "train"
         audio_dir = train_dir / "audio"
@@ -196,49 +196,53 @@ class BarkopediaDataset(BaseDataset):
                 f"Path: {train_dir}"
             )
         dog_id_to_class = _resolve_dog_id_to_class(df, self._data_dir)
+        
+        unique_dog_ids = sorted(df['dog_id'].unique())
+        if self._train_split is None:
+            split_idx = len(unique_dog_ids)
+        else:
+            split_idx = int(len(unique_dog_ids) * self._train_split)
+        
+        train_dog_ids = set(unique_dog_ids[:split_idx])
+        val_dog_ids = set(unique_dog_ids[split_idx:])
+        
         train_entries = []
         val_entries = []
-        rng = random.Random(self._random_seed)
+        
         for dog_id, group in df.groupby("dog_id"):
-            indices = list(group.index)
-            rng.shuffle(indices)
-
-            if self._train_split is None:
-                split_idx = len(indices)
+            if dog_id in train_dog_ids:
+                target_list = train_entries
+            elif dog_id in val_dog_ids:
+                target_list = val_entries
             else:
-                split_idx = int(len(indices) * self._train_split)
+                continue  # shouldn't happen
+            
+            for idx in group.index:
+                row = group.loc[idx]
+                audio_path = audio_dir / row["filename"]
 
-            train_indices = indices[:split_idx]
-            val_indices = indices[split_idx:]
+                if not audio_path.exists():
+                    print(f"Warning: file {audio_path} missing, skipping")
+                    continue
+                if audio_path.stat().st_size == 0:
+                    print(f"Warning: empty file {audio_path}, skipping")
+                    continue
+                try:
+                    with sf.SoundFile(audio_path) as f:
+                        if f.frames == 0:
+                            print(f"Warning: file {audio_path} has zero frames, skipping")
+                            continue
+                except Exception as e:
+                    print(f"Warning: corrupt file {audio_path}: {e}, skipping")
+                    continue
 
-            for idx_list, target_list in ((train_indices, train_entries),
-                                          (val_indices, val_entries)):
-                for idx in idx_list:
-                    row = group.loc[idx]
-                    audio_path = audio_dir / row["filename"]
-
-    
-                    if not audio_path.exists():
-                        print(f"Warning: file {audio_path} missing, skipping")
-                        continue
-                    if audio_path.stat().st_size == 0:
-                        print(f"Warning: empty file {audio_path}, skipping")
-                        continue
-                    try:
-                        with sf.SoundFile(audio_path) as f:
-                            if f.frames == 0:
-                                print(f"Warning: file {audio_path} has zero frames, skipping")
-                                continue
-                    except Exception as e:
-                        print(f"Warning: corrupt file {audio_path}: {e}, skipping")
-                        continue
-
-                    entry = {
-                        "path": str(audio_path.absolute()),
-                        "audio_len": float(row["duration"]),
-                        "label": dog_id_to_class[dog_id],
-                    }
-                    target_list.append(entry)
+                entry = {
+                    "path": str(audio_path.absolute()),
+                    "audio_len": float(row["duration"]),
+                    "label": dog_id_to_class[dog_id],
+                }
+                target_list.append(entry)
+        
         train_path = self._data_dir / "train_index.json"
         val_path = self._data_dir / "val_index.json"
         with open(train_path, "w") as f:

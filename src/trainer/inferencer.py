@@ -64,6 +64,10 @@ class Inferencer(BaseTrainer):
         self.batch_transforms = batch_transforms
         self.backend = backend
 
+        # For 3D embedding visualization
+        self.all_embeddings = []
+        self.all_labels = []
+
         # define dataloaders
         self.evaluation_dataloaders = {k: v for k, v in dataloaders.items()}
 
@@ -101,6 +105,11 @@ class Inferencer(BaseTrainer):
         for part, dataloader in self.evaluation_dataloaders.items():
             logs = self._inference_part(part, dataloader)
             part_logs[part] = logs
+        
+        # Visualize 3D embeddings
+        if self.all_embeddings:
+            self._visualize_embeddings_3d()
+        
         return part_logs
 
     def process_batch(self, batch_idx, batch, metrics, part):
@@ -130,6 +139,12 @@ class Inferencer(BaseTrainer):
 
         outputs = self.model(**batch)
         batch.update(outputs)
+
+        # Collect embeddings for visualization
+        if "embedding" in batch:
+            self.all_embeddings.append(batch["embedding"].detach().cpu())
+            if "labels" in batch:
+                self.all_labels.append(batch["labels"].detach().cpu())
 
         # Compute backend scores if backend is available and embeddings exist
         if "embedding" in batch:
@@ -221,3 +236,33 @@ class Inferencer(BaseTrainer):
                 results.update(met.finalize())
                 met.reset()
         return results
+
+    def _visualize_embeddings_3d(self):
+        """Visualize collected embeddings in 3D using PCA."""
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D
+        
+        all_emb = torch.cat(self.all_embeddings, dim=0)
+        all_lab = torch.cat(self.all_labels, dim=0) if self.all_labels else None
+        
+        # Reduce to 3D using PCA
+        emb_pca, _, _ = torch.pca_lowrank(all_emb, q=3)
+        
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        if all_lab is not None:
+            colors = all_lab.numpy()
+            scatter = ax.scatter(emb_pca[:, 0], emb_pca[:, 1], emb_pca[:, 2], c=colors, cmap='viridis', alpha=0.7)
+            plt.colorbar(scatter, ax=ax, label='Dog ID')
+        else:
+            ax.scatter(emb_pca[:, 0], emb_pca[:, 1], emb_pca[:, 2], alpha=0.7)
+        
+        ax.set_xlabel('PC1')
+        ax.set_ylabel('PC2')
+        ax.set_zlabel('PC3')
+        ax.set_title('3D Embedding Visualization (PCA)')
+        
+        plt.savefig(self.save_path / "embeddings_3d.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"Saved 3D embedding visualization to {self.save_path / 'embeddings_3d.png'}")
