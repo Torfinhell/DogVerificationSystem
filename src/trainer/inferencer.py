@@ -233,7 +233,12 @@ class Inferencer(BaseTrainer):
         results = self.evaluation_metrics.result()
         for met in self.metrics["inference"]:
             if isinstance(met, EpochMetric):
-                results.update(met.finalize())
+                final = met.finalize()
+                if met.name == "confusion_matrix":
+                    # Save confusion matrix to file
+                    torch.save(final["confusion_matrix"], self.save_path / "confusion_matrix.pt")
+                else:
+                    results.update(final)
                 met.reset()
         return results
 
