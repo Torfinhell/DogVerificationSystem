@@ -1,14 +1,20 @@
 train:
+  audio:  # Resample audio to target sample rate first
+    _target_: src.transforms.ResampleTransform
+    target_sample_rate: ${sample_rate}
   get_spectral_feat:
     _target_: src.transforms.MfccExtractor  
-    sample_rate: 16000
+    sample_rate: ${sample_rate}
     n_mfcc: 24
     hop_length_sec: 0.01      # 10 ms
     win_length_sec: 0.025     # 25 ms
 inference:
+  audio:  # Resample audio to target sample rate first
+    _target_: src.transforms.ResampleTransform
+    target_sample_rate: ${sample_rate}
   get_spectral_feat:
     _target_: src.transforms.MfccExtractor
-    sample_rate: 16000
+    sample_rate: ${sample_rate}
     n_mfcc: 24
     hop_length_sec: 0.01
     win_length_sec: 0.025

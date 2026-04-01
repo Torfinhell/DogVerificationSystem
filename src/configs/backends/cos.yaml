@@ -1,0 +1,6 @@
+# Cosine similarity backend for evaluation/inference
+# This backend computes cosine similarity between embeddings
+
+_target_: src.backends.CosineBackend
+
+normalize: true  # L2-normalize embeddings before computing similarity

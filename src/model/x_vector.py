@@ -3,12 +3,14 @@ import torch
 class TDNN(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, num_groups, dilation, activation=nn.ReLU(), dropout=0.1):
         super().__init__()
+        padding = (kernel_size - 1) * dilation // 2
         self.conv = nn.Conv1d(
             in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=kernel_size,
             groups=num_groups,
             dilation=dilation,
+            padding=padding,              
             padding_mode="reflect"
         )
         self.activation = activation

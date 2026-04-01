@@ -16,17 +16,37 @@ class EERMetric(EpochMetric):
         self._genuine: list[float] = []
         self._impostor: list[float] = []
 
-    def __call__(self, logits: torch.Tensor, labels: torch.Tensor, **kwargs):
-        logits = logits.to(self.device)
-        labels = labels.to(self.device)
-        probs = F.softmax(logits, dim=-1)
-        labels = labels.long()
-        b = probs.shape[0]
-        idx = torch.arange(b, device=probs.device)
-        self._genuine.extend(probs[idx, labels].detach().cpu().numpy().tolist())
-        mask = torch.ones_like(probs, dtype=torch.bool)
-        mask[idx, labels] = False
-        self._impostor.extend(probs[mask].detach().cpu().numpy().tolist())
+    def __call__(self, logits: torch.Tensor = None, labels: torch.Tensor = None, **kwargs):
+        scores_key = None
+        if "backend_scores" in kwargs:
+            scores_key = "backend_scores"
+        elif "cos_scores" in kwargs:
+            scores_key = "cos_scores"
+        
+        if scores_key is not None:
+            scores = kwargs[scores_key].to(self.device)
+            labels = labels.to(self.device)
+            b = labels.shape[0]
+            for i in range(b):
+                for j in range(b):
+                    if i == j:
+                        continue
+                    score = scores[i, j].item()
+                    if labels[i] == labels[j]:
+                        self._genuine.append(score)  
+                    else:
+                        self._impostor.append(score) 
+        elif logits is not None and labels is not None:
+            logits = logits.to(self.device)
+            labels = labels.to(self.device)
+            probs = F.softmax(logits, dim=-1)
+            labels = labels.long()
+            b = probs.shape[0]
+            idx = torch.arange(b, device=probs.device)
+            self._genuine.extend(probs[idx, labels].detach().cpu().numpy().tolist())
+            mask = torch.ones_like(probs, dtype=torch.bool)
+            mask[idx, labels] = False
+            self._impostor.extend(probs[mask].detach().cpu().numpy().tolist())
         return None
 
     def finalize(self) -> dict[str, float]:

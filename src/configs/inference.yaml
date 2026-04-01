@@ -4,10 +4,12 @@ defaults:
   - datasets: example_eval # we do not want to run inference on training data
   - dataloader: example
   - transforms: example
+  - backends: cos  # Choose backend: cos, plda
   - _self_
+sample_rate: 16000
 inferencer:
-  device_tensors: ["data_object", "labels"] # which tensors should be on device (ex. GPU)
+  device_tensors: ["data_object", "labels", "audio_lengths", "spectral_feat_lengths"] # which tensors should be on device (ex. GPU)
   device: auto # device name or "auto"
   save_path: "example" # any name here, can be a dataset name
   seed: 1
-  from_pretrained: "saved/model_best.pth" # path to the pretrained model
+  from_pretrained: "saved/model_best.pth" # path to the pretrained model  train_backend_on_dataset: null  # Optional: dataset name to collect embeddings for backend training (e.g., "barkopedia"). If null, backend won't be trained; if using PLDA, it must be trained on some data.

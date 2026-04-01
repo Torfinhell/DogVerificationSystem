@@ -1,0 +1,9 @@
+# PLDA (Probabilistic Linear Discriminant Analysis) backend for evaluation/inference
+# This backend implements PLDA-based similarity scoring
+
+_target_: src.backends.PLDABackend
+
+# Add your configuration parameters here
+# Example:
+# n_components: 256
+# n_iter: 10

@@ -1,3 +1,6 @@
+# Instance transforms with audio augmentation
+# Augmentation is applied BEFORE spectral feature extraction
+
 train:
   audio:  # Audio transforms applied to raw audio
     _target_: torchvision.transforms.v2.Compose
@@ -11,18 +14,21 @@ train:
         p: 0.5  # Probability of applying
         sample_rate: ${sample_rate}
       - _target_: src.transforms.RIRReverbAugment
-        download_dir: "data/augs/reverb"
+        download_dir: "data/data_augs/reverb"
         p: 0.5  # Probability of applying
         sample_rate: ${sample_rate}
 
-  get_spectral_feat:
-    _target_: src.transforms.MfccExtractor
-    sample_rate: ${sample_rate}
-    n_mfcc: 80
-    hop_length_sec: 0.01      # 10 ms
-    win_length_sec: 0.025     # 25 ms
+  get_spectral_feat: # special key for getting spectral_feat
+    _target_: torchvision.transforms.v2.Compose
+    transforms:
+      - _target_: torchaudio.transforms.MelSpectrogram
+        sample_rate: ${sample_rate}
+      - _target_: src.transforms.FbankAug
+        freq_mask_width: [0, 8]
+        time_mask_width: [0, 10]
 
 inference:
+  # No augmentation during inference
   audio:  # Resample audio to target sample rate first
     _target_: torchvision.transforms.v2.Compose
     transforms:
@@ -30,8 +36,5 @@ inference:
         target_sample_rate: ${sample_rate}
 
   get_spectral_feat:
-    _target_: src.transforms.MfccExtractor
+    _target_: torchaudio.transforms.MelSpectrogram
     sample_rate: ${sample_rate}
-    n_mfcc: 80
-    hop_length_sec: 0.01
-    win_length_sec: 0.025
