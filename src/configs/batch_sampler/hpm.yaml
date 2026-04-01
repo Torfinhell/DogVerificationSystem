@@ -1,6 +1,6 @@
 sampler:
   _target_: src.batch_sampler.HardPrototypeMiningBatchSampler
-  n_selected_speakers: 2
+  n_selected_speakers: 5
   n_similar_speakers: 4
   n_utterances_per_speaker: 4
   random_seed: 42
