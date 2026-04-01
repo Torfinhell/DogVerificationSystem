@@ -2,7 +2,7 @@ import kagglehub
 import shutil
 import os
 cached_path = kagglehub.dataset_download("nikitasolonitsyn/barkopedia/versions/6")
-target_path = "./data"
+target_path = "."
 os.makedirs(target_path, exist_ok=True)
 for item in os.listdir(cached_path):
     src = os.path.join(cached_path, item)
