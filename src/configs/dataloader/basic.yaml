@@ -1,6 +1,6 @@
 dataloader_standard:
   _target_: torch.utils.data.DataLoader
-  batch_size: 32
+  batch_size: 80
   num_workers: 2
   pin_memory: True
 
