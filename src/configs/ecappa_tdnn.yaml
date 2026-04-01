@@ -31,7 +31,7 @@ loss_function:
 trainer:
   log_step: 50
   n_epochs: 100
-  epoch_len: 300
+  epoch_len: 100
   device_tensors: ["spectral_feat", "labels", "audio_lengths", "spectral_feat_lengths"] # which tensors should be on device (ex. GPU)
   resume_from: null # null or path to the checkpoint dir with *.pth and config.yaml
   device: 'auto' # device name or "auto"
