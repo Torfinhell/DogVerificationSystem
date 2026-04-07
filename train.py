@@ -54,11 +54,12 @@ def main(config):
     loss_function = instantiate(config.loss_function).to(device)
     metrics = instantiate(config.metrics)
 
-    # instantiate backend for verification (used during validation/inference)
-    backend = None
+    # instantiate backends for verification (used during validation/inference)
+    backends = []
     if config.get("backends") is not None:
-        backend = instantiate(config.backends).to(device)
-        logger.info(f"Loaded backend: {backend.__class__.__name__}")
+        backends = instantiate(config.backends)
+        backends=[x.to(device) for x in backends]
+        logger.info(f"Loaded backends: {[b.__class__.__name__ for b in backends]}")
 
     # optimizer: optional lr_loss for AAM-Softmax (etc.) vs model — see optim_utils
     if(config.trainer.epoch_len is None):
@@ -83,7 +84,7 @@ def main(config):
         writer=writer,
         batch_transforms=batch_transforms,
         skip_oom=config.trainer.get("skip_oom", True),
-        backend=backend,
+        backends=backends,
     )
 
     trainer.train()

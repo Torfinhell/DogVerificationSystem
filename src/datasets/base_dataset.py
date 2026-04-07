@@ -39,6 +39,7 @@ class BaseDataset(Dataset):
         self._index: List[dict] = index
 
         self.instance_transforms = instance_transforms
+        self.num_classes = len(set(e['label'] for e in self._index))
 
     def __getitem__(self, ind):
         """
@@ -66,7 +67,10 @@ class BaseDataset(Dataset):
             audio = audio.mean(dim=0, keepdim=True)
         if audio.dim() == 2:
             audio = audio.squeeze(0)
-        instance_data = {"audio": audio, "labels": data_dict["label"], "sample_rate":sr}
+        instance_data = {"audio": audio, "label": data_dict["label"], "sample_rate":sr}
+        # Add breed information if available
+        if "breed" in data_dict:
+            instance_data["breed"] = data_dict["breed"]
         instance_data = self.preprocess_data(instance_data)
         if "get_spectral_feat" in self.instance_transforms:
             spectral_feat=self.instance_transforms["get_spectral_feat"](instance_data["audio"])

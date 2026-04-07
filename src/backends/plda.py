@@ -51,6 +51,8 @@ class PLDABackend(BaseBackend):
         self.register_buffer("G", None)     
         self.register_buffer("Sigma", None) 
         self._is_fitted = False        
+        self.train_embeddings = None
+        self.train_labels = None        
 
     def forward(self, embeddings1, embeddings2):
         """
@@ -101,7 +103,21 @@ class PLDABackend(BaseBackend):
         
         return scores
 
+    def predict(self, embeddings):
+        """Predict class labels using PLDA scores to training embeddings."""
+        if not self._is_fitted:
+            raise ValueError("Backend not fitted")
+        if self.train_labels is None:
+            raise ValueError("PLDA fitted without labels, cannot predict classes")
+        scores = self.forward(embeddings, self.train_embeddings)  # [batch_size, train_size]
+        # For each test embedding, find the training embedding with highest score, then get its label
+        _, indices = scores.max(dim=-1)
+        preds = self.train_labels[indices]
+        return preds
+
     def fit(self, embeddings, labels=None):
+        self.train_embeddings = embeddings.clone()
+        self.train_labels = labels.clone() if labels is not None else None
         N, D = embeddings.shape
         device = embeddings.device
         

@@ -18,21 +18,38 @@ class ClassificationMetric(BaseMetric):
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
         self.classification_metric = classification_metric.to(device)
+        self._num_classes = getattr(classification_metric, 'num_classes', None)
 
-    def __call__(self, logits: torch.Tensor, labels: torch.Tensor, **kwargs):
+    @property
+    def num_classes(self):
+        return self._num_classes
+
+    @num_classes.setter
+    def num_classes(self, value):
+        """Update num_classes for the underlying torchmetrics object if possible."""
+        self._num_classes = value
+        if hasattr(self.classification_metric, 'num_classes'):
+            # Try to update num_classes, but some torchmetrics don't support this
+            try:
+                self.classification_metric.num_classes = value
+            except (AttributeError, ValueError):
+                # If we can't update, we'll need to recreate the metric
+                pass
+
+    def __call__(self, logits: torch.Tensor, label: torch.Tensor, **kwargs):
         """
         Metric calculation logic.
 
         Args:
             logits (Tensor): model output predictions.
-            labels (Tensor): ground-truth labels.
+            label (Tensor): ground-truth label.
         Returns:
             metric (float): calculated metric value.
         """
         logits = logits.to(self.device)
-        labels = labels.to(self.device)
+        label = label.to(self.device)
         classes = logits.argmax(dim=-1)
-        self.classification_metric.update(classes, labels)
+        self.classification_metric.update(classes, label)
         result = self.classification_metric.compute()
         return float(result.detach().cpu().item())
 

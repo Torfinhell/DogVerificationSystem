@@ -78,14 +78,12 @@ class Inferencer(BaseTrainer):
         # define metrics
         self.metrics = metrics
         if self.metrics is not None:
-            self.evaluation_metrics = MetricTracker(
-                *[
-                    m.name
-                    for m in self.metrics["inference"]
-                    if not isinstance(m, EpochMetric)
-                ],
-                writer=None,
-            )
+            evaluation_metric_keys = [
+                m.name
+                for m in self.metrics.get("inference", self.metrics.get("val", []) + self.metrics.get("test", []))
+                if not isinstance(m, EpochMetric)
+            ]
+            self.evaluation_metrics = MetricTracker(*evaluation_metric_keys, writer=None)
         else:
             self.evaluation_metrics = None
 
@@ -143,8 +141,8 @@ class Inferencer(BaseTrainer):
         # Collect embeddings for visualization
         if "embedding" in batch:
             self.all_embeddings.append(batch["embedding"].detach().cpu())
-            if "labels" in batch:
-                self.all_labels.append(batch["labels"].detach().cpu())
+            if "label" in batch:
+                self.all_labels.append(batch["label"].detach().cpu())
 
         # Compute backend scores if backend is available and embeddings exist
         if "embedding" in batch:
@@ -161,7 +159,8 @@ class Inferencer(BaseTrainer):
                 batch["backend_scores"] = batch_scores
 
         if metrics is not None:
-            for met in self.metrics["inference"]:
+            inference_metrics = self.metrics.get(part, self.metrics.get("inference", []))
+            for met in inference_metrics:
                 if isinstance(met, EpochMetric):
                     met(**batch)
                     continue
@@ -181,7 +180,7 @@ class Inferencer(BaseTrainer):
             # clone because of
             # https://github.com/pytorch/pytorch/issues/1995
             logits = batch["logits"][i].clone()
-            label = batch["labels"][i].clone()
+            label = batch["label"][i].clone()
             pred_label = logits.argmax(dim=-1)
 
             output_id = current_id + i
@@ -231,7 +230,8 @@ class Inferencer(BaseTrainer):
                 )
 
         results = self.evaluation_metrics.result()
-        for met in self.metrics["inference"]:
+        inference_metrics = self.metrics.get(part, self.metrics.get("inference", []))
+        for met in inference_metrics:
             if isinstance(met, EpochMetric):
                 final = met.finalize()
                 if met.name == "confusion_matrix":

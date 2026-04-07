@@ -60,8 +60,8 @@ def fit_backend_on_dataset(model, backend, config, device, dataset_name):
                 
                 if emb is not None:
                     embeddings_list.append(emb.detach().cpu())
-                    if "labels" in batch:
-                        labels_list.append(batch["labels"].detach().cpu())
+                    if "label" in batch:
+                        labels_list.append(batch["label"].detach().cpu())
     all_embeddings = torch.cat(embeddings_list, dim=0)
     all_labels = torch.cat(labels_list, dim=0) if labels_list else None
     backend.fit(all_embeddings.to(device), labels=all_labels)

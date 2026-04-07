@@ -27,16 +27,16 @@ class DCFMetric(EpochMetric):
         self._genuine: list[float] = []
         self._impostor: list[float] = []
 
-    def __call__(self, logits: torch.Tensor, labels: torch.Tensor, **kwargs):
+    def __call__(self, logits: torch.Tensor, label: torch.Tensor, **kwargs):
         logits = logits.to(self.device)
-        labels = labels.to(self.device)
+        label = label.to(self.device)
         probs = F.softmax(logits, dim=-1)
-        labels = labels.long()
+        label = label.long()
         b = probs.shape[0]
         idx = torch.arange(b, device=probs.device)
-        self._genuine.extend(probs[idx, labels].detach().cpu().numpy().tolist())
+        self._genuine.extend(probs[idx, label].detach().cpu().numpy().tolist())
         mask = torch.ones_like(probs, dtype=torch.bool)
-        mask[idx, labels] = False
+        mask[idx, label] = False
         self._impostor.extend(probs[mask].detach().cpu().numpy().tolist())
         return None
 

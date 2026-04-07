@@ -16,6 +16,7 @@ from pytubefix import YouTube
 from pytubefix.cli import on_progress
 import soundfile as sf
 import numpy as np
+import cv2
 
 def inf_loop(dataloader):
     """
@@ -212,6 +213,91 @@ class FILEDownloader:
         return False
 
 
+class FILETracker:
+    def __init__(self, tracker_path: str | Path, download_from_disk: bool = True):
+        self.tracker_path = Path(tracker_path)
+        self.download_from_disk = download_from_disk
+        self.yandex_token = os.getenv("YANDEX_TOKEN")
+        self.data = {
+            "in_progress": {},
+            "completed": {},
+            "failed": {},
+            "skipped": {},
+        }
+        if self.yandex_token is not None:
+            self.client = yadisk.Client(token=self.yandex_token)
+
+    def __enter__(self):
+        if self.yandex_token is not None and self.download_from_disk:
+            remote_path = f"/{self.tracker_path.name}"
+            with self.client:
+                if self.client.exists(remote_path):
+                    print(f"Downloading tracker {remote_path} from Yandex.Disk")
+                    self.client.download(str(self.tracker_path), str(self.tracker_path))
+
+        if self.tracker_path.exists():
+            with self.tracker_path.open() as f:
+                self.data = json.load(f)
+        return self
+
+    def save(self):
+        self.tracker_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.tracker_path.open("w") as f:
+            json.dump(self.data, f, indent=2)
+
+        if self.yandex_token is not None:
+            remote_path = f"/{self.tracker_path.name}"
+            with self.client:
+                self.client.upload(str(self.tracker_path), remote_path, overwrite=True)
+
+    def mark_started(self, video_id: str, info: dict | None = None) -> None:
+        self.data["in_progress"][video_id] = {
+            "status": "in_progress",
+            "info": info or {},
+        }
+
+    def mark_done(self, video_id: str, info: dict | None = None) -> None:
+        self.data["in_progress"].pop(video_id, None)
+        self.data["completed"][video_id] = {
+            "status": "completed",
+            "info": info or {},
+        }
+
+    def mark_failed(self, video_id: str, reason: str | None = None, info: dict | None = None) -> None:
+        self.data["in_progress"].pop(video_id, None)
+        self.data["failed"][video_id] = {
+            "status": "failed",
+            "reason": reason,
+            "info": info or {},
+        }
+
+    def mark_skipped(self, video_id: str, reason: str | None = None, info: dict | None = None) -> None:
+        self.data["in_progress"].pop(video_id, None)
+        self.data["skipped"][video_id] = {
+            "status": "skipped",
+            "reason": reason,
+            "info": info or {},
+        }
+
+    def get_status(self, video_id: str) -> str:
+        if video_id in self.data["completed"]:
+            return "completed"
+        if video_id in self.data["failed"]:
+            return "failed"
+        if video_id in self.data["skipped"]:
+            return "skipped"
+        if video_id in self.data["in_progress"]:
+            return "in_progress"
+        return "unknown"
+
+    def summary(self) -> dict:
+        return {key: len(value) for key, value in self.data.items()}
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.save()
+        return False
+
+
 def _is_temporary_error(e: Exception) -> bool:
     msg = str(e).lower()
     return any(x in msg for x in [
@@ -268,103 +354,102 @@ def youtube_download(
         frame_dir = frames_root / breed / video_id
         frame_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load bad videos
-    if bad_videos_path.exists():
-        bad_videos = set(json.load(open(bad_videos_path)))
-    else:
-        bad_videos = set()
-
-    if video_id in bad_videos:
-        return []
-
-    # Check missing
-    missing = False
-    for seg_idx, (start, end) in enumerate(segments):
-        if not (video_dir / f"{seg_idx}_{start}_{end}.wav").exists():
-            missing = True
-            break
-
-    waveform, sr = None, None
-
-    if missing:
-        try:
-            if not video_path.exists():
-                _download_video(video_id, video_path)
-
-            waveform, sr = _extract_audio_from_video(video_path)
-
-        except Exception as e:
-            error_msg = str(e).lower()
-            is_bot = "bot" in error_msg or "captcha" in error_msg
-
-            print(f"Error processing video {video_id}: {e}")
-
-            if is_bot:
-                raise RuntimeError(
-                    f"Bot detection encountered for video {video_id}. "
-                    f"Use proxy / cookies / PO token."
-                )
-            else:
-                if _is_temporary_error(e):
-                    print(f"Temporary error for {video_id}, skipping.")
-                else:
-                    bad_videos.add(video_id)
-                    with open(bad_videos_path, "w") as f:
-                        json.dump(list(bad_videos), f, indent=2)
-
+    tracker_path = audio_root.parent / "download_tracker.json"
+    with FILETracker(tracker_path) as tracker:
+        current_status = tracker.get_status(video_id)
+        if current_status == "completed":
             return []
+        tracker.mark_started(video_id, {"breed": breed, "segments": segments})
+        if bad_videos_path.exists():
+            bad_videos = set(json.load(open(bad_videos_path)))
+        else:
+            bad_videos = set()
 
-    outputs = []
+        if video_id in bad_videos:
+            tracker.mark_skipped(video_id, reason="bad_video")
+            return []
+        missing = False
+        for seg_idx, (start, end) in enumerate(segments):
+            if not (video_dir / f"{seg_idx}_{start}_{end}.wav").exists():
+                missing = True
+                break
+        waveform, sr = None, None
 
-    # ---- AUDIO PROCESSING ----
-    for seg_idx, (start, end) in enumerate(segments):
-        duration = end - start
-        audio_path = video_dir / f"{seg_idx}_{start}_{end}.wav"
+        if missing:
+            try:
+                if not video_path.exists():
+                    _download_video(video_id, video_path)
+                waveform, sr = _extract_audio_from_video(video_path)
+            except Exception as e:
+                error_msg = str(e).lower()
+                is_bot = "bot" in error_msg or "captcha" in error_msg
+                print(f"Error processing video {video_id}: {e}")
+                if is_bot:
+                    raise RuntimeError(
+                        f"Bot detection encountered for video {video_id}. "
+                        f"Use proxy / cookies / PO token."
+                    )
+                else:
+                    if _is_temporary_error(e):
+                        print(f"Temporary error for {video_id}, skipping.")
+                    else:
+                        bad_videos.add(video_id)
+                        with open(bad_videos_path, "w") as f:
+                            json.dump(list(bad_videos), f, indent=2)
+                    tracker.mark_failed(video_id, reason=str(e), info={"temporary": _is_temporary_error(e)})
+                return []
 
-        if not audio_path.exists():
-            start_sample = int(start * sr)
-            end_sample = int(end * sr)
+        outputs = []
 
-            segment = waveform[start_sample:end_sample]
+        # ---- AUDIO PROCESSING ----
+        for seg_idx, (start, end) in enumerate(segments):
+            duration = end - start
+            audio_path = video_dir / f"{seg_idx}_{start}_{end}.wav"
 
-            if segment.ndim > 1:
-                segment = np.mean(segment, axis=1)
+            if not audio_path.exists():
+                start_sample = int(start * sr)
+                end_sample = int(end * sr)
 
-            sf.write(audio_path, segment, sr)
+                segment = waveform[start_sample:end_sample]
 
-        entry_out = {
-            "path": str(audio_path.absolute()),
-            "label": breed,
-            "audio_len": float(duration),
-        }
+                if segment.ndim > 1:
+                    segment = np.mean(segment, axis=1)
 
-        # ---- FRAME EXTRACTION (cv2) ----
-        if not audio_only:
-            seg_frame_dir = frame_dir / f"{seg_idx}_{start}_{end}"
-            seg_frame_dir.mkdir(parents=True, exist_ok=True)
+                sf.write(audio_path, segment, sr)
 
-            if not any(seg_frame_dir.iterdir()):
-                cap = cv2.VideoCapture(str(video_path))
+            entry_out = {
+                "path": str(audio_path.absolute()),
+                "label": breed,
+                "audio_len": float(duration),
+            }
 
-                fps = cap.get(cv2.CAP_PROP_FPS)
-                start_frame = int(start * fps)
-                end_frame = int(end * fps)
+            # ---- FRAME EXTRACTION (cv2) ----
+            if not audio_only:
+                seg_frame_dir = frame_dir / f"{seg_idx}_{start}_{end}"
+                seg_frame_dir.mkdir(parents=True, exist_ok=True)
 
-                cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+                if not any(seg_frame_dir.iterdir()):
+                    cap = cv2.VideoCapture(str(video_path))
 
-                frame_idx = start_frame
-                saved_idx = 0
+                    fps = cap.get(cv2.CAP_PROP_FPS)
+                    start_frame = int(start * fps)
+                    end_frame = int(end * fps)
 
-                while frame_idx < end_frame:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-                    # save 1 FPS (you can adjust)
-                    if frame_idx % int(fps) == 0:
-                        frame_path = seg_frame_dir / f"frame_{saved_idx:04d}.jpg"
-                        cv2.imwrite(str(frame_path), frame)
-                        saved_idx += 1
+                    frame_idx = start_frame
+                    saved_idx = 0
+
+                    while frame_idx < end_frame:
+                        ret, frame = cap.read()
+                        if not ret:
+                            break
+
+                        # save 1 FPS (you can adjust)
+                        if frame_idx % int(fps) == 0:
+                            frame_path = seg_frame_dir / f"frame_{saved_idx:04d}.jpg"
+                            cv2.imwrite(str(frame_path), frame)
+                            saved_idx += 1
 
                     frame_idx += 1
 
