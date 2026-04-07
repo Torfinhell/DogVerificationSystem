@@ -4,21 +4,15 @@ train:
     - _target_: src.datasets.BarkopediaDataset
       part: train
       train_split: 0.9
-      num_classes: ${num_classes}
       instance_transforms: ${transforms.instance_transforms.train}
 
     - _target_: src.datasets.Dog2VecDataset
       part: train
       train_split: 0.8
-
-  num_local_classes:
-    - ${num_classes}
-    - 6   # number of breeds
-
+  num_local_classes: null #[60, 100]  # Approximate values, adjust as needed
   dataset_names:
     - barkopedia
     - dog2vec
-
 
 val:
   _target_: src.datasets.DatasetCombine
@@ -26,17 +20,12 @@ val:
     - _target_: src.datasets.BarkopediaDataset
       part: val
       train_split: 0.9
-      num_classes: ${num_classes}
       instance_transforms: ${transforms.instance_transforms.inference}
 
     - _target_: src.datasets.Dog2VecDataset
       part: val
       train_split: 0.8
-
-  num_local_classes:
-    - ${num_classes}
-    - 6
-
+  num_local_classes: null #[60, 100]
   dataset_names:
     - barkopedia
     - dog2vec

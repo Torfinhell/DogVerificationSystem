@@ -19,3 +19,13 @@ class BaseBackend(ABC, nn.Module):
     def forward(self, embeddings1, embeddings2):
         """Forward pass for the backend."""
         pass
+
+    @abstractmethod
+    def fit(self, embeddings, labels):
+        """Fit the backend on training embeddings."""
+        pass
+
+    @abstractmethod
+    def predict(self, embeddings):
+        """Predict class labels for embeddings."""
+        pass

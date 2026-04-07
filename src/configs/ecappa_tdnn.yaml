@@ -1,12 +1,12 @@
 defaults:
   - model: ecappa_tdnn
   - writer: wandb
-  - metrics: basic
+  - metrics: barkopedia
   - datasets: barkopedia
   - dataloader: basic
   - transforms: ecappa_tdnn
   - batch_sampler: hpm
-  - backends: cos  # Choose backend: cos, plda
+  - backends: all_backends  # Choose backend: cos, plda
   - _self_
 
 # Must match ``num_classes`` in mapping.json / label_map.json after building indices.
@@ -32,7 +32,7 @@ trainer:
   log_step: 50
   n_epochs: 100
   epoch_len: 100
-  device_tensors: ["spectral_feat", "labels", "audio_lengths", "spectral_feat_lengths"] # which tensors should be on device (ex. GPU)
+  device_tensors: ["spectral_feat", "label", "audio_lengths", "spectral_feat_lengths"] # which tensors should be on device (ex. GPU)
   resume_from: null # null or path to the checkpoint dir with *.pth and config.yaml
   device: 'auto' # device name or "auto"
   allow_tf32: true

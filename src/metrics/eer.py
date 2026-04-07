@@ -16,7 +16,7 @@ class EERMetric(EpochMetric):
         self._genuine: list[float] = []
         self._impostor: list[float] = []
 
-    def __call__(self, logits: torch.Tensor = None, labels: torch.Tensor = None, **kwargs):
+    def __call__(self, logits: torch.Tensor = None, label: torch.Tensor = None, **kwargs):
         scores_key = None
         if "backend_scores" in kwargs:
             scores_key = "backend_scores"
@@ -25,27 +25,27 @@ class EERMetric(EpochMetric):
         
         if scores_key is not None:
             scores = kwargs[scores_key].to(self.device)
-            labels = labels.to(self.device)
-            b = labels.shape[0]
+            label = label.to(self.device)
+            b = label.shape[0]
             for i in range(b):
                 for j in range(b):
                     if i == j:
                         continue
                     score = scores[i, j].item()
-                    if labels[i] == labels[j]:
+                    if label[i] == label[j]:
                         self._genuine.append(score)  
                     else:
                         self._impostor.append(score) 
-        elif logits is not None and labels is not None:
+        elif logits is not None and label is not None:
             logits = logits.to(self.device)
-            labels = labels.to(self.device)
+            label = label.to(self.device)
             probs = F.softmax(logits, dim=-1)
-            labels = labels.long()
+            label = label.long()
             b = probs.shape[0]
             idx = torch.arange(b, device=probs.device)
-            self._genuine.extend(probs[idx, labels].detach().cpu().numpy().tolist())
+            self._genuine.extend(probs[idx, label].detach().cpu().numpy().tolist())
             mask = torch.ones_like(probs, dtype=torch.bool)
-            mask[idx, labels] = False
+            mask[idx, label] = False
             self._impostor.extend(probs[mask].detach().cpu().numpy().tolist())
         return None
 

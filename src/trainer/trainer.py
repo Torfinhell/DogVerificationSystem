@@ -60,24 +60,31 @@ class Trainer(BaseTrainer):
         batch = self.move_batch_to_device(batch)
         batch = self.transform_batch(batch)  # transform batch on device -- faster
 
-        metric_funcs = self.metrics["inference"]
         if self.is_train:
-            metric_funcs = self.metrics["train"]
+            metric_funcs = self.metrics.get("train", [])
             self.optimizer.zero_grad()
+        else:
+            metric_funcs = self.metrics.get(
+                getattr(self, "current_eval_part", "inference"),
+                self.metrics.get("inference", []),
+            )
         with self._autocast():
             outputs = self.model(**batch)
             batch.update(outputs)
 
-            all_losses = self.criterion(**batch)
-            batch.update(all_losses)
+            # For SV tasks, skip loss computation during validation
+            if not self.is_train and "AAMSoftmax" in self.config.loss_function._target_:
+                # Provide dummy loss for logging purposes
+                batch["loss"] = torch.tensor(0.0, device=self.device)
+            else:
+                all_losses = self.criterion(**batch)
+                batch.update(all_losses)
+
         if not self.is_train and "embedding" in batch:
             embeddings = batch["embedding"]
             embeddings_norm = F.normalize(embeddings, p=2, dim=1)
             cos_scores = torch.mm(embeddings_norm, embeddings_norm.t())
             batch["cos_scores"] = cos_scores
-            if self.backend is not None:
-                batch_scores = self.backend(embeddings, embeddings)
-                batch["backend_scores"] = batch_scores
 
         if self.is_train:
             batch["loss"].backward() 
@@ -88,9 +95,11 @@ class Trainer(BaseTrainer):
 
         # update metrics for each loss (in case of multiple losses)
         for loss_name in self.config.writer.logger.loss_names:
-            v = batch[loss_name].item()
-            metrics.update(loss_name, v)
-            if epoch_metrics is not None:
+            if loss_name in metrics.keys():
+                v = batch[loss_name].item()
+                metrics.update(loss_name, v)
+            if epoch_metrics is not None and loss_name in epoch_metrics.keys():
+                v = batch[loss_name].item()
                 epoch_metrics.update(loss_name, v)
 
         for met in metric_funcs:

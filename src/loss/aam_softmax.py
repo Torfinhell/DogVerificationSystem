@@ -16,20 +16,20 @@ class AAMSoftmaxLoss(nn.Module):
         self.num_speakers=num_speakers
         self.embedding_dim=embedding_dim
 
-    def forward(self, logits: torch.Tensor, labels: torch.Tensor, **batch):
+    def forward(self, logits: torch.Tensor, label: torch.Tensor, **batch):
         """
         Args:
             logits (Tensor): predictions (Batch_speakers, NUM_SPEAKERS)
-            labels (Tensor): ground-truth labels.(Batch_speakers,)
+            label (Tensor): ground-truth label.(Batch_speakers,)
         Returns:
             losses (dict): dict containing calculated loss functions.
         """
         b, ns=logits.shape
-        assert b==len(labels) and ns==self.embedding_dim
+        assert b==len(label) and ns==self.embedding_dim
         logits = F.normalize(logits, dim=1)
         cos_theta = torch.matmul(self.embedding.weight, logits.T).T
         psi = cos_theta - self.margin
-        onehot = F.one_hot(labels, self.num_speakers)
+        onehot = F.one_hot(label, self.num_speakers)
         logits = self.scale * torch.where(onehot == 1, psi, cos_theta)        
-        return {"loss": self.loss(logits, labels), "logits":logits}
+        return {"loss": self.loss(logits, label), "logits":logits}
 

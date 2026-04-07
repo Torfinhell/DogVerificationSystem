@@ -11,12 +11,12 @@ class SoftmaxLoss(nn.Module):
         super().__init__()
         self.loss = nn.CrossEntropyLoss()
 
-    def forward(self, logits: torch.Tensor, labels: torch.Tensor, **batch):
+    def forward(self, logits: torch.Tensor, label: torch.Tensor, **batch):
         """
         Args:
             logits (Tensor): predictions (Batch_speakers, NUM_SPEAKERS)
-            labels (Tensor): ground-truth labels.(Batch_speakers,)
+            label (Tensor): ground-truth label.(Batch_speakers,)
         Returns:
             losses (dict): dict containing calculated loss functions.
         """
-        return {"loss": self.loss(logits, labels)}
+        return {"loss": self.loss(logits, label)}

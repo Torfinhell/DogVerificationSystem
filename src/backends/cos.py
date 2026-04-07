@@ -25,6 +25,31 @@ class CosineBackend(BaseBackend):
         """
         super().__init__()
         self.normalize = normalize
+        self.prototypes = None
+        self._is_fitted = False
+
+    def fit(self, embeddings, labels):
+        """Fit cosine backend by computing class prototypes."""
+        unique_labels = torch.unique(labels)
+        prototypes = []
+        for label in unique_labels:
+            mask = labels == label
+            prototype = embeddings[mask].mean(dim=0)
+            if self.normalize:
+                prototype = F.normalize(prototype, p=2, dim=0)
+            prototypes.append(prototype)
+        self.prototypes = torch.stack(prototypes)
+        self._is_fitted = True
+
+    def predict(self, embeddings):
+        """Predict class labels using cosine similarity to prototypes."""
+        if not self._is_fitted:
+            raise ValueError("Backend not fitted")
+        if self.normalize:
+            embeddings = F.normalize(embeddings, p=2, dim=1)
+        scores = torch.mm(embeddings, self.prototypes.t())
+        return scores.argmax(dim=-1)
+
     def forward(self, embeddings1, embeddings2):
         if self.normalize:
             embeddings1 = F.normalize(embeddings1, p=2, dim=1)

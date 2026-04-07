@@ -1,5 +1,6 @@
 from abc import abstractmethod
 import contextlib
+import copy
 
 import torch
 from numpy import inf
@@ -37,7 +38,7 @@ class BaseTrainer:
         epoch_len=None,
         skip_oom=True,
         batch_transforms=None,
-        backend=None,
+        backends=None,
     ):
         """
         Args:
@@ -62,8 +63,8 @@ class BaseTrainer:
             batch_transforms (dict[Callable] | None): transforms that
                 should be applied on the whole batch. Depend on the
                 tensor name.
-            backend (nn.Module | None): backend for computing similarity scores
-                during evaluation/inference (e.g., CosineBackend, PLDABackend).
+            backends (list[nn.Module] | None): list of backends for computing similarity scores
+                during evaluation/inference (e.g., [CosineBackend, PLDABackend]).
         """
         self.is_train = True
 
@@ -81,17 +82,13 @@ class BaseTrainer:
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
         self.batch_transforms = batch_transforms
-        self.backend = backend
+        self.backends = backends or []
 
-        
-        self.train_dataloader_raw = dataloaders["train"]
-        self.train_dataloader = self.train_dataloader_raw
+        self.train_dataloader = dataloaders["train"]
         if epoch_len is None:
-            
-            self.epoch_len = len(self.train_dataloader_raw)
+            self.epoch_len = len(self.train_dataloader)
         else:
-            
-            self.train_dataloader = inf_loop(self.train_dataloader_raw)
+            self.train_dataloader = inf_loop(self.train_dataloader)
             self.epoch_len = epoch_len
 
         self.evaluation_dataloaders = {
@@ -143,17 +140,43 @@ class BaseTrainer:
             writer=self.writer,
         )
         self.epoch_train_metrics = MetricTracker(*_train_metric_keys, writer=None)
-        self.evaluation_metrics = MetricTracker(
-            *self.config.writer.logger.loss_names,
-            *[
-                m.name
-                for m in self.metrics["inference"]
-                if not isinstance(m, EpochMetric)
-            ],
-            writer=self.writer,
-        )
-
         
+
+        def _metric_keys_for_partition(part_name):
+            partition_metrics = self.metrics.get(part_name, [])
+            return [m.name for m in partition_metrics if not isinstance(m, EpochMetric)]
+
+        # Set num_classes on metrics from datasets
+        for part in ["val", "test"]:
+            if part in self.evaluation_dataloaders:
+                num_classes = self.evaluation_dataloaders[part].dataset.num_classes
+                for met in self.metrics.get(part, []):
+                    if hasattr(met, "num_classes"):
+                        met.num_classes = num_classes
+                    
+
+        self.val_metrics = MetricTracker(*_metric_keys_for_partition("val"), writer=self.writer)
+
+        self.backend_metric_objects = []
+        for backend in self.backends:
+            mets = [copy.deepcopy(met) for met in self.metrics.get("test", [])]
+            self.backend_metric_objects.append(mets)
+
+        # Set num_classes on backend metrics
+        for part in ["val", "test"]:
+            if part in self.evaluation_dataloaders:
+                num_classes = self.evaluation_dataloaders[part].dataset.num_classes
+                for i, backend_mets in enumerate(self.backend_metric_objects):
+                    for met in backend_mets:
+                        if hasattr(met, "num_classes"):
+                            met.num_classes = num_classes
+
+        backend_keys = []
+        for i, mets in enumerate(self.backend_metric_objects):
+            for met in mets:
+                if not isinstance(met, EpochMetric):
+                    backend_keys.append(f"backend_{i}_{met.name}")
+        self.test_metrics = MetricTracker(*_metric_keys_for_partition("test"), *backend_keys, writer=self.writer)
 
         self.checkpoint_dir = (
             ROOT_PATH / config.trainer.save_dir / config.writer.logger.run_name
@@ -170,13 +193,24 @@ class BaseTrainer:
         """Trainer overrides with AMP autocast when enabled."""
         return contextlib.nullcontext()
 
-    def _gather_embeddings(self, dataloader, max_samples: int, max_batches: int):
+    def _collect_embeddings(self, dataloader, max_samples: int = None, max_batches: int = None):
+        """Collect embeddings and labels from dataloader.
+        
+        Args:
+            dataloader: Data loader to collect from.
+            max_samples: Max total samples to collect. If None, collect all.
+            max_batches: Max batches to process. If None, process all.
+            
+        Returns:
+            embeddings (Tensor): [N, embedding_dim]
+            labels (Tensor): [N]
+        """
         embs, labs = [], []
         n = 0
         self.model.eval()
         with torch.no_grad():
             for bi, batch in enumerate(dataloader):
-                if bi >= max_batches:
+                if max_batches is not None and bi >= max_batches:
                     break
                 batch = self.move_batch_to_device(batch)
                 batch = self.transform_batch(batch)
@@ -186,68 +220,22 @@ class BaseTrainer:
                 if e is None:
                     e = out["logits"]
                 emb = e.detach().cpu()
-                y = batch["labels"].detach().cpu()
+                y = batch["label"].detach().cpu()
                 embs.append(emb)
                 labs.append(y)
                 n += emb.shape[0]
-                if n >= max_samples:
+                if max_samples is not None and n >= max_samples:
                     break
         if not embs:
             return None, None
-        emb = torch.cat(embs, dim=0)[:max_samples]
-        lab = torch.cat(labs, dim=0)[:max_samples]
-        pts = embedding_to_3d(emb)
-        return pts.numpy(), lab.numpy()
+        embeddings = torch.cat(embs, dim=0)
+        labels = torch.cat(labs, dim=0)
+        if max_samples is not None:
+            embeddings = embeddings[:max_samples]
+            labels = labels[:max_samples]
+        return embeddings, labels
 
-    def _fit_backend_after_epoch(self):
-        """
-        Fit the backend (e.g., PLDA) on all training embeddings after an epoch.
-        
-        This method should be called after each training epoch to update the
-        backend model with the latest embeddings from the training set.
-        """
-        if self.backend is None or not hasattr(self.backend, "fit"):
-            return
-        
-        # Collect all embeddings from training dataloader
-        embeddings_list = []
-        labels_list = []
-        
-        self.model.eval()
-        with torch.no_grad():
-            for batch in tqdm(
-                self.train_dataloader_raw,
-                desc="Collecting embeddings for backend",
-                total=len(self.train_dataloader_raw),
-            ):
-                batch = self.move_batch_to_device(batch)
-                batch = self.transform_batch(batch)
-                with self._autocast():
-                    out = self.model(**batch)
-                
-                # Extract embeddings
-                emb = out.get("embedding")
-                if emb is None:
-                    emb = out.get("logits")
-                
-                if emb is not None:
-                    embeddings_list.append(emb.detach().cpu())
-                    labels_list.append(batch["labels"].detach().cpu())
-        
-        if not embeddings_list:
-            self.logger.warning("No embeddings collected for backend fitting")
-            return
-        
-        # Concatenate all embeddings and labels
-        all_embeddings = torch.cat(embeddings_list, dim=0)
-        all_labels = torch.cat(labels_list, dim=0) if labels_list else None
-        
-        # Fit the backend
-        try:
-            self.backend.fit(all_embeddings.to(self.device), labels=all_labels)
-            self.logger.info(f"Backend {self.backend.__class__.__name__} fitted on {all_embeddings.shape[0]} embeddings")
-        except Exception as e:
-            self.logger.error(f"Error fitting backend: {e}")
+
 
     def _wandb_after_train_epoch(self, epoch, logs):
         if self.writer is None:
@@ -263,37 +251,32 @@ class BaseTrainer:
         max_s = cfg_get(wcfg, "embedding_max_samples", 2048)
         max_b = cfg_get(wcfg, "embedding_max_batches", 64)
         self.model.eval()
-        self.writer.set_step(epoch * self.epoch_len, "train")
-        e, y = self._gather_embeddings(self.train_dataloader_raw, max_s, max_b)
-        if e is not None:
-            self.writer.add_plot_3d(
-                "embedding_3d", e, y, title=f"train PCA epoch {epoch}"
-            )
         for part, dl in self.evaluation_dataloaders.items():
             self.writer.set_step(epoch * self.epoch_len, part)
-            e, y = self._gather_embeddings(dl, max_s, max_b)
-            if e is not None:
+            embs, labs = self._collect_embeddings(dl, max_s, max_b)
+            if embs is not None:
+                pts = embedding_to_3d(embs)
                 self.writer.add_plot_3d(
-                    "embedding_3d", e, y, title=f"{part} PCA epoch {epoch}"
+                    "embedding_3d", pts.numpy(), labs.numpy(), title=f"{part} PCA epoch {epoch}"
                 )
 
     def update_train_dataloader(self):
-        similarity_matrix=(self.criterion.embedding.weight@self.criterion.embedding.weight.T)
+        """Update training dataloader with batch sampler based on criterion weights."""
+        similarity_matrix = self.criterion.embedding.weight @ self.criterion.embedding.weight.T
         batch_sampler = instantiate(
             self.config.batch_sampler.sampler,
-            ds=self.train_dataloader_raw.dataset,
+            ds=self.train_dataloader.dataset,
             similarity_matrix=similarity_matrix
         )
 
         new_dataloader = instantiate(
             self.config.dataloader.dataloader_with_batch_sampler,
-            dataset=self.train_dataloader_raw.dataset,
+            dataset=self.train_dataloader.dataset,
             collate_fn=collate_fn,
             worker_init_fn=set_worker_seed,
             batch_sampler=batch_sampler,
         )
 
-        self.train_dataloader_raw = new_dataloader
         if self.cfg_trainer.get("epoch_len", None) is None:
             self.train_dataloader = new_dataloader
         else:
@@ -322,13 +305,8 @@ class BaseTrainer:
         for epoch in range(self.start_epoch, self.epochs + 1):
             self._last_epoch = epoch
             result = self._train_epoch(epoch)
-            
-            # Fit backend (e.g., PLDA) on all training embeddings after epoch
-            self._fit_backend_after_epoch()
-            
             # logging embeddings (PCA 3D) + W&B epoch_summary scalars
             self._wandb_after_train_epoch(epoch, result)
-
             logs = {"epoch": epoch}
             logs.update(result)
 
@@ -385,8 +363,6 @@ class BaseTrainer:
 
             self.train_metrics.update("grad_norm", self._get_grad_norm())
             self.epoch_train_metrics.update("grad_norm", self._get_grad_norm())
-
-            
             if batch_idx % self.log_step == 0:
                 if self.writer is not None:
                     self.writer.set_step((epoch - 1) * self.epoch_len + batch_idx)
@@ -409,14 +385,11 @@ class BaseTrainer:
 
         
         for part, dataloader in self.evaluation_dataloaders.items():
-            val_logs = self._evaluation_epoch(epoch, part, dataloader)
-
-            logs.update(**{f"{part}_{name}": value for name, value in val_logs.items() if name != "confusion_matrix"})
-
+            part_logs = self._evaluation_epoch(epoch, part, dataloader)
+            logs.update(**{f"{part}_{name}": value for name, value in part_logs.items()})
         if self.config.get("batch_sampler", None) is not None:
             self.update_train_dataloader()
         self._reset_stateful_metrics()
-
         return logs
 
     def _reset_stateful_metrics(self):
@@ -432,6 +405,9 @@ class BaseTrainer:
     def _evaluation_epoch(self, epoch, part, dataloader):
         """
         Evaluate model on the partition after training for an epoch.
+        
+        For val partition: collects embeddings and fits backends, then evaluates metrics for main and each backend.
+        For test partition: uses fitted backends to compute metrics for main and each backend.
 
         Args:
             epoch (int): current training epoch.
@@ -442,74 +418,149 @@ class BaseTrainer:
         """
         self.is_train = False
         self.model.eval()
-        self.evaluation_metrics.reset()
+        metrics_for_part = self.metrics.get(part, [])
+        batch_metrics = [m for m in metrics_for_part if not isinstance(m, EpochMetric)]
+        epoch_metrics = [m for m in metrics_for_part if isinstance(m, EpochMetric)]
 
-        confusion_matrix_metric = None
-        for met in self.metrics["inference"]:
-            if met.name == "confusion_matrix":
-                confusion_matrix_metric = met
-                break
+        logs = {}
 
-        with torch.no_grad():
-            for batch_idx, batch in tqdm(
-                enumerate(dataloader),
-                desc=part,
-                total=len(dataloader),
-            ):
-                batch = self.process_batch(
-                    batch,
-                    metrics=self.evaluation_metrics,
-                )
-                # One media sample per val epoch (first batch; order fixed when shuffle=False)
-                if self.writer is not None and batch_idx == 0:
-                    self.writer.set_step(epoch * self.epoch_len, part)
-                    self._log_batch(batch_idx, batch, part)
+        # First, collect embeddings for fitting backends on val
+        if part == "val" and self.backends:
+            all_embeddings = []
+            all_labels = []
+            with torch.no_grad():
+                for batch in dataloader:
+                    batch = self.move_batch_to_device(batch)
+                    batch = self.transform_batch(batch)
+                    with self._autocast():
+                        out = self.model(**batch)
+                        e = out.get("embedding")
+                        if e is None:
+                            e = out["logits"]
+                        emb = e.detach().cpu()
+                        y = batch["label"].detach().cpu()
+                        all_embeddings.append(emb)
+                        all_labels.append(y)
+            if all_embeddings:
+                all_embeddings_cat = torch.cat(all_embeddings, dim=0).to(self.device)
+                all_labels_cat = torch.cat(all_labels, dim=0)
+                for backend in self.backends:
+                    try:
+                        backend.fit(all_embeddings_cat, labels=all_labels_cat)
+                        self.logger.info(f"Backend {backend.__class__.__name__} fitted on {all_embeddings_cat.shape[0]} embeddings")
+                    except Exception as e:
+                        self.logger.error(f"Error fitting backend: {e}")
 
+        # Compute metrics for main (only for val)
+        if part == "val":
+            self.val_metrics.reset()
+            all_predictions = []
+            all_labels = []
+            with torch.no_grad():
+                for batch_idx, batch in tqdm(enumerate(dataloader), desc=f"{part} main", total=len(dataloader)):
+                    batch = self.process_batch(batch, metrics=self.val_metrics)
+                    if "logits" in batch:
+                        all_predictions.append(batch["logits"].detach().cpu())
+                    elif "preds" in batch:
+                        all_predictions.append(batch["preds"].detach().cpu())
+                    if "label" in batch:
+                        all_labels.append(batch["label"].detach().cpu())
+                    if self.writer is not None and batch_idx == 0:
+                        self.writer.set_step(epoch * self.epoch_len, part)
+                        self._log_batch(batch_idx, batch, part)
             if self.writer is not None:
                 self.writer.set_step(epoch * self.epoch_len, part)
-                self._log_scalars(self.evaluation_metrics)
-
-        results = self.evaluation_metrics.result()
-
-        for met in self.metrics["inference"]:
-            if isinstance(met, EpochMetric):
+                self._log_scalars(self.val_metrics)
+            results = self.val_metrics.result()
+            logs.update(**{f"{name}": value for name, value in results.items()})
+            for met in epoch_metrics:
                 extra = met.finalize()
-                results.update(extra)
+                logs.update(**{f"{k}": v for k, v in extra.items()})
                 if self.writer is not None:
                     self.writer.set_step(epoch * self.epoch_len, part)
                     for k, v in extra.items():
-                        try:
-                            fv = float(v)
-                        except (TypeError, ValueError):
-                            continue
-                        if fv == fv:  # not NaN
-                            self.writer.add_scalar(k, fv)
+                        if isinstance(v, torch.Tensor) and v.numel() == 1:
+                            v = float(v.detach().cpu().item())
+                        if isinstance(v, (float, int)) and not (isinstance(v, float) and v != v):
+                            self.writer.add_scalar(k, v)
                 met.reset()
 
-        if (
-            confusion_matrix_metric is not None
-            and hasattr(confusion_matrix_metric, "metric")
-            and hasattr(confusion_matrix_metric.metric, "compute")
-        ):
-            confusion_matrix_data = confusion_matrix_metric.metric.compute()
-            if isinstance(confusion_matrix_data, torch.Tensor):
-                results["confusion_matrix"] = confusion_matrix_data.detach().cpu()
-            else:
-                results["confusion_matrix"] = confusion_matrix_data
-            confusion_matrix_metric.metric.reset()
-            if (
-                self.writer is not None
-                and getattr(self.writer, "wandb", None) is not None
-                and cfg_get(self.config, "writer.log_confusion_matrix_image", True)
-                and hasattr(self.writer, "add_confusion_matrix_image")
-            ):
-                self.writer.add_confusion_matrix_image(
-                    "confusion_matrix",
-                    results["confusion_matrix"],
-                    title=f"{part} epoch {epoch}",
-                )
+            # Log confusion matrix for main
+            if all_predictions and all_labels:
+                all_predictions_cat = torch.cat(all_predictions, dim=0)
+                all_labels_cat = torch.cat(all_labels, dim=0)
+                if self.writer is not None and getattr(self.writer, "wandb", None) is not None and cfg_get(self.config, "writer.log_confusion_matrix_image", True) and hasattr(self.writer, "add_confusion_matrix_image"):
+                    self.writer.set_step(epoch * self.epoch_len, part)
+                    self.writer.add_confusion_matrix_image("confusion_matrix", preds=all_predictions_cat, labels=all_labels_cat, title=f"{part} epoch {epoch}")
 
-        return results
+        # Compute metrics for each backend (for val and test)
+        for i, backend in enumerate(self.backends):
+            if hasattr(backend, '_is_fitted') and backend._is_fitted:
+                backend_metric_names = [m.name for m in self.backend_metric_objects[i] if not isinstance(m, EpochMetric)]
+                backend_metrics = MetricTracker(*backend_metric_names, writer=self.writer)
+                backend_metrics.reset()
+                all_backend_preds = []
+                all_labels = []
+                with torch.no_grad():
+                    for batch_idx, batch in tqdm(enumerate(dataloader), desc=f"{part} backend {i}", total=len(dataloader)):
+                        batch = self.move_batch_to_device(batch)
+                        batch = self.transform_batch(batch)
+                        with self._autocast():
+                            out = self.model(**batch)
+                            batch.update(out)
+                            if "embedding" in batch:
+                                embeddings = batch["embedding"]
+                                preds = backend.predict(embeddings)
+                                batch["preds"] = preds
+                                all_backend_preds.append(preds.detach().cpu())
+                            if "label" in batch:
+                                all_labels.append(batch["label"].detach().cpu())
+                            if not self.is_train and "AAMSoftmax" in self.config.loss_function._target_:
+                                batch["loss"] = torch.tensor(0.0, device=self.device)
+                            else:
+                                all_losses = self.criterion(**batch)
+                                batch.update(all_losses)
+                        for met in self.backend_metric_objects[i]:
+                            if met.name == "confusion_matrix" or isinstance(met, EpochMetric):
+                                met(**batch)
+                            else:
+                                met_value = met(**batch)
+                                if isinstance(met_value, torch.Tensor):
+                                    if met_value.numel() == 1:
+                                        met_value = float(met_value.detach().cpu().item())
+                                    else:
+                                        continue
+                                if isinstance(met_value, (float, int)) and not (isinstance(met_value, float) and (met_value != met_value)):
+                                    backend_metrics.update(met.name, met_value)
+                        if self.writer is not None and batch_idx == 0:
+                            self.writer.set_step(epoch * self.epoch_len, part)
+                            self._log_batch(batch_idx, batch, part)
+                if self.writer is not None:
+                    self.writer.set_step(epoch * self.epoch_len, part)
+                    self._log_scalars(backend_metrics)
+                backend_results = backend_metrics.result()
+                logs.update(**{f"backend_{i}_{name}": value for name, value in backend_results.items()})
+                for met in self.backend_metric_objects[i]:
+                    if isinstance(met, EpochMetric):
+                        extra = met.finalize()
+                        logs.update(**{f"backend_{i}_{k}": v for k, v in extra.items()})
+                        if self.writer is not None:
+                            self.writer.set_step(epoch * self.epoch_len, part)
+                            for k, v in extra.items():
+                                if isinstance(v, torch.Tensor) and v.numel() == 1:
+                                    v = float(v.detach().cpu().item())
+                                if isinstance(v, (float, int)) and not (isinstance(v, float) and v != v):
+                                    self.writer.add_scalar(f"backend_{i}_{k}", v)
+                        met.reset()
+                # Log confusion matrix for backend
+                if all_backend_preds and all_labels:
+                    all_backend_preds_cat = torch.cat(all_backend_preds, dim=0)
+                    all_labels_cat = torch.cat(all_labels, dim=0)
+                    if self.writer is not None and getattr(self.writer, "wandb", None) is not None and cfg_get(self.config, "writer.log_confusion_matrix_image", True) and hasattr(self.writer, "add_confusion_matrix_image"):
+                        self.writer.set_step(epoch * self.epoch_len, part)
+                        self.writer.add_confusion_matrix_image(f"confusion_matrix_backend_{i}", preds=all_backend_preds_cat, labels=all_labels_cat, title=f"{part} backend {i} epoch {epoch}")
+
+        return logs
 
     def _monitor_performance(self, logs, not_improved_count):
         """
@@ -532,8 +583,6 @@ class BaseTrainer:
         stop_process = False
         if self.mnt_mode != "off":
             try:
-                
-                
                 if self.mnt_mode == "min":
                     improved = logs[self.mnt_metric] <= self.mnt_best
                 elif self.mnt_mode == "max":

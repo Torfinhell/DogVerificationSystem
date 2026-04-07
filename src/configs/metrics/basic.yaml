@@ -1,49 +1,18 @@
-train: # metrics that are calculated during training
-  - _target_: src.metrics.ClassificationMetric
-    classification_metric:
-      _target_: torchmetrics.classification.MulticlassAccuracy
-      num_classes: ${num_classes}
-      average: "macro"
+train:
+  - _target_: src.metrics.EERMetric
     device: ${trainer.device}
-    name: "TRAIN_MulticlassAccuracy"
-
-  - _target_: src.metrics.ClassificationMetric
-    classification_metric:
-      _target_: torchmetrics.classification.MulticlassPrecision
-      num_classes: ${num_classes}
-      average: "macro"
-    device: ${trainer.device}
-    name: "TRAIN_MulticlassPrecision"
-
-inference: # metrics that are calculated during inference (eval)
-  - _target_: src.metrics.ClassificationMetric
-    classification_metric:
-      _target_: torchmetrics.classification.MulticlassAccuracy
-      num_classes: ${num_classes}
-      average: "macro"
-    device: ${trainer.device}
-    name: "MulticlassAccuracy"
-
-  - _target_: src.metrics.ClassificationMetric
-    classification_metric:
-      _target_: torchmetrics.classification.MulticlassPrecision
-      num_classes: ${num_classes}
-      average: "macro"
-    device: ${trainer.device}
-    name: "MulticlassPrecision"
-
-  - _target_: src.metrics.ConfusionMatrixMetric
-    num_classes: ${num_classes}
-    device: ${trainer.device}
-    name: "confusion_matrix"
-
+    name: "TRAIN_EER"
+val:
   - _target_: src.metrics.EERMetric
     device: ${trainer.device}
     name: "EER"
-
   - _target_: src.metrics.DCFMetric
     device: ${trainer.device}
     p_target: 0.01
     c_miss: 1.0
     c_fa: 1.0
     name: "minDCF"
+
+test: []
+# Confusion matrix is now computed directly in _evaluation_epoch
+# Results include: cm_accuracy, cm_precision_macro/micro, cm_recall_macro/micro, cm_f1_macro/micro

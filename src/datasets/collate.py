@@ -15,7 +15,8 @@ def collate_fn(dataset_items: list[dict]):
             - "audio": padded audio tensor of shape (batch, max_len)
             - "audio_lengths": original audio lengths before padding (batch,)
             - "spectral_feat_lengths": original spectral feature lengths before padding (batch,)
-            - "labels": stacked labels tensor of shape (batch,)
+            - "label": stacked label tensor of shape (batch,)
+            - "breed": stacked breed tensor (if available)
             - (optionally other keys, handled as lists if not padded)
     """
     batch = {}
@@ -34,8 +35,11 @@ def collate_fn(dataset_items: list[dict]):
             transposed = [v.T for v in values] 
             padded = pad_sequence(transposed, batch_first=True)  
             batch[key] = padded.permute(0, 2, 1)  
-        elif key == "labels":
-            batch[key] = torch.tensor(values)  
+        elif key == "label":
+            batch[key] = torch.tensor(values)
+        elif key == "breed":
+            # Breed is stored as index, convert to tensor
+            batch[key] = torch.tensor(values, dtype=torch.long)
         else:
             batch[key] = values
 

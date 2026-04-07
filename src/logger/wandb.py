@@ -293,10 +293,57 @@ class WandBWriter:
             step=self.step,
         )
 
-    def add_confusion_matrix_image(self, name: str, cm, title: str | None = None):
-        """Log a confusion matrix tensor/array as a heatmap image."""
+    def add_confusion_matrix_image(
+        self,
+        name: str,
+        cm=None,
+        preds=None,
+        labels=None,
+        title: str | None = None,
+    ):
+        """Log a confusion matrix image from either a confusion matrix or raw preds/labels."""
         if self.wandb is None:
             return
+
+        if preds is not None and labels is not None:
+            if isinstance(preds, list):
+                preds = torch.cat(preds, dim=0)
+            if isinstance(labels, list):
+                labels = torch.cat(labels, dim=0)
+
+            if preds.dim() > 1:
+                preds = preds.argmax(dim=-1)
+            preds = preds.detach().cpu()
+            labels = labels.detach().cpu()
+
+            if preds.numel() == 0 or labels.numel() == 0 or preds.shape != labels.shape:
+                return
+
+            num_classes = int(max(preds.max().item(), labels.max().item()) + 1)
+            if num_classes < 2:
+                return
+
+            max_classes = 32
+            try:
+                max_classes = int(self.wandb.config.get("confusion_matrix_max_classes", max_classes))
+            except Exception:
+                max_classes = 32
+            if num_classes > max_classes:
+                return
+
+            from torchmetrics.classification import ConfusionMatrix
+
+            device = "cpu"
+            try:
+                device = self.wandb.config.get("device", "cpu")
+            except Exception:
+                pass
+            metric = ConfusionMatrix(num_classes=num_classes, task="multiclass").to(device)
+            cm = metric(preds.to(device), labels.to(device)).detach().cpu().float()
+
+        if cm is None:
+            return
+
         img = confusion_matrix_figure(cm, title=title or name)
         self.wandb.log(
             {self._object_name(name): self.wandb.Image(img)},
