@@ -21,7 +21,7 @@ BREED_JSONS = [
 BASE_URL = "https://raw.githubusercontent.com/fispresent/dog2vec/main/data/150h_data/"
 
 
-DATA_DIR = Path("data/dog2vec_dataset")
+DATA_DIR = Path("data/datasets/dog2vec_dataset")
 RAW_DIR = DATA_DIR / "raw"
 FILTERED_CSV = DATA_DIR / "filtered.csv"
 FINAL_JSON = DATA_DIR / "filtered_index.json"

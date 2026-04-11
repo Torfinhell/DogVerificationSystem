@@ -31,7 +31,7 @@ class Dog2VecDataset(BaseDataset):
     ):
         assert part in ["train", "val"], "part must be 'train' or 'val'"
         if data_dir is None:
-            data_dir = Path("./data/dog2vec_dataset")
+            data_dir = Path("./data/datasets/dog2vec_dataset")
         self.data_dir = Path(data_dir)
         self.train_split = train_split
         self.part = part
