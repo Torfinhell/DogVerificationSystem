@@ -95,9 +95,10 @@ def download_info_youtube():
                     if video_id in processed_ids:
                         continue
                     status = tracker.get_status(video_id)
-                    if status == "completed":
+                    if status in ("completed", "failed", "skipped"):
                         processed_ids.add(video_id)
                         continue
+
 
                     segments = data[video_id]
                     title = ""
