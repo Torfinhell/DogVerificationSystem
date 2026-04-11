@@ -21,6 +21,12 @@ class CsvChunkDownloader:
     def __enter__(self):
         return self
 
+    def update_csv(self, row: pd.Series):
+        """Add a row to the buffer and upload if chunk size reached."""
+        self.buffer.append(row.to_dict())
+        if self.chunk_rows is not None and len(self.buffer) >= self.chunk_rows:
+            self.upload_chunk()
+
     def upload_chunk(self):
         if not self.buffer:
             return
@@ -50,8 +56,6 @@ class CsvChunkDownloader:
     def __exit__(self, exc_type, exc_value, traceback):
         self.upload_chunk()
         return False
-
-
 class FILEDownloader:
     def __init__(self, file_path: str | Path, download_from_disk: bool = True):
         self.file_path = Path(file_path)
