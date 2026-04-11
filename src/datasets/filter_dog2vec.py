@@ -1,12 +1,14 @@
 from pathlib import Path
 import json
-from .data_utils import youtube_download
-from .data_utils import FILEDownloader, CsvChunkDownloader, FILETracker
+from src.datasets.data_utils import FILEDownloader, CsvChunkDownloader, FILETracker, youtube_download
 import pandas as pd
 from collections import defaultdict
 import ast
 from pytubefix import YouTube
 from tqdm import tqdm
+import requests
+import argparse
+import os
 BREED_JSONS = [
         "chihuahua.json",
         "german_shepherd.json",
@@ -34,7 +36,6 @@ def download_raw_jsons():
         if local_path.exists():
             continue
         url = BASE_URL + json_file
-        import requests
         r = requests.get(url)
         r.raise_for_status()
         with open(local_path, "wb") as f:
@@ -214,8 +215,6 @@ def final_filter_result(
         with open(FINAL_JSON, "w") as f:
             json.dump(final_entries, f, indent=2)
 if __name__ == "__main__":
-    import argparse
-    import os
     parser = argparse.ArgumentParser(description="Dog2Vec dataset preparation pipeline")
     parser.add_argument(
         "--max_videos_per_breed_context",
