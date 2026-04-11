@@ -79,6 +79,7 @@ def filter_context(entry, allowed_contexts: list[str] | None = None) -> bool:
 def download_info_youtube():
     processed_ids = set()
     breed_counts: dict[str, int] = {}
+    consecutive_bots = 0  
 
     with FILETracker(TRACKER_JSON) as tracker:
         with CsvChunkDownloader(
@@ -89,7 +90,6 @@ def download_info_youtube():
             for json_file in tqdm(BREED_JSONS, desc="Processing breed files"):
                 breed = json_file.replace(".json", "")
                 path = RAW_DIR / json_file
-
                 data = json.load(open(path))
 
                 for video_id in tqdm(data.keys(), desc=f"Processing {breed} videos", leave=False):
@@ -100,7 +100,6 @@ def download_info_youtube():
                         processed_ids.add(video_id)
                         continue
 
-
                     segments = data[video_id]
                     title = ""
                     description = ""
@@ -109,21 +108,26 @@ def download_info_youtube():
                         yt = YouTube(url)
                         title = yt.title or ""
                         description = yt.description or ""
+                        consecutive_bots = 0
                     except Exception as e:
                         error_msg = str(e).lower()
-                        is_bot = "bot" in error_msg or "captcha" in error_msg
-
-                        print(f"Error fetching metadata for video {video_id}: {e}")
+                        is_bot = "bot" in error_msg or "captcha" in error_msg or "detected as a bot" in error_msg
 
                         if is_bot:
-                            raise RuntimeError(
-                                f"Bot detection encountered for video {video_id}. "
-                                f"Use proxy / cookies / PO token."
-                            )
+                            consecutive_bots += 1
+                            print(f"Bot detection for video {video_id} (consecutive: {consecutive_bots})")
+                            if consecutive_bots >= 10:
+                                raise RuntimeError(
+                                    f"Bot detection encountered for {consecutive_bots} videos in a row. "
+                                    f"Last video: {video_id}. Use proxy / cookies / PO token."
+                                )
+                            time.sleep(2)
+                            continue   
                         else:
+                            consecutive_bots = 0   
+                            print(f"Error fetching metadata for video {video_id}: {e}")
                             tracker.mark_failed(video_id, reason=str(e))
                             continue
-
                     entry = {
                         "video_id": video_id,
                         "breed": breed,
@@ -134,7 +138,8 @@ def download_info_youtube():
                     breed_counts[breed] = breed_counts.get(breed, 0) + 1
                     tracker.mark_done(video_id, {"breed": breed, "context": entry["context"]})
                     processed_ids.add(video_id)
-                    time.sleep(1)  
+                    time.sleep(1)
+
     category_info = {
         "num_breeds": len(breed_counts),
         "breed_video_counts": breed_counts,
@@ -144,8 +149,6 @@ def download_info_youtube():
     with FILEDownloader(CATEGORY_JSON) as fd:
         with open(CATEGORY_JSON, "w") as f:
             json.dump(category_info, f, indent=2)
-
-
 def final_filter_result(
     audio_only: bool = True,
     max_videos_per_breed_context: int | None = None,
