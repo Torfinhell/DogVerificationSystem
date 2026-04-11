@@ -1,6 +1,5 @@
 from abc import abstractmethod
 import contextlib
-import copy
 
 import torch
 from numpy import inf
@@ -19,9 +18,7 @@ from src.utils.hydra_cfg import cfg_get
 from src.utils.plot_utils import embedding_to_3d
 
 class BaseTrainer:
-    """
-    Base class for all trainers.
-    """
+    """Input: train config/runtime deps. Output: train/eval orchestration."""
 
     def __init__(
         self,
@@ -40,33 +37,9 @@ class BaseTrainer:
         batch_transforms=None,
         backends=None,
     ):
-        """
-        Args:
-            model (nn.Module): PyTorch model.
-            criterion (nn.Module): loss function for model training.
-            metrics (dict): dict with the definition of metrics for training
-                (metrics[train]) and inference (metrics[inference]). Each
-                metric is an instance of src.metrics.BaseMetric.
-            optimizer (Optimizer): optimizer for the model.
-            lr_scheduler (LRScheduler): learning rate scheduler for the
-                optimizer.
-            config (DictConfig): experiment config containing training config.
-            device (str): device for tensors and model.
-            dataloaders (dict[DataLoader]): dataloaders for different
-                sets of data.
-            logger (Logger): logger that logs output.
-            writer (WandBWriter | CometMLWriter): experiment tracker.
-            epoch_len (int | None): number of steps in each epoch for
-                iteration-based training. If None, use epoch-based
-                training (len(dataloader)).
-            skip_oom (bool): skip batches with the OutOfMemory error.
-            batch_transforms (dict[Callable] | None): transforms that
-                should be applied on the whole batch. Depend on the
-                tensor name.
-            backends (list[nn.Module] | None): list of backends for computing similarity scores
-                during evaluation/inference (e.g., [CosineBackend, PLDABackend]).
-        """
+        """Input: model stack, loaders, metrics. Output: initialized trainer state."""
         self.is_train = True
+        self.current_eval_part = None
 
         self.config = config
         self.cfg_trainer = self.config.trainer
@@ -95,19 +68,16 @@ class BaseTrainer:
             k: v for k, v in dataloaders.items() if k != "train"
         }
 
-        
         self._last_epoch = 0  
         self.start_epoch = 1
         self.epochs = self.cfg_trainer.n_epochs
 
-        
-
         self.save_period = (
             self.cfg_trainer.save_period
-        )  
+        )
         self.monitor = self.cfg_trainer.get(
             "monitor", "off"
-        )  
+        )
 
         if self.monitor == "off":
             self.mnt_mode = "off"
@@ -121,63 +91,34 @@ class BaseTrainer:
             if self.early_stop <= 0:
                 self.early_stop = inf
 
-        
         self.writer = writer
 
-        
         self.metrics = metrics
+        self.metric_keys = self.metrics.get("metric_keys", {})
+        self.backend_keys = self.metrics.get("backend_keys", [])
+        self.backend_metric_objects = self.metrics.get("test", {}).get("backends", {})
         _train_metric_keys = (
             *self.config.writer.logger.loss_names,
             "grad_norm",
-            *[
-                m.name
-                for m in self.metrics["train"]
-                if not isinstance(m, EpochMetric)
-            ],
+            *self.metric_keys.get("train", []),
         )
         self.train_metrics = MetricTracker(
             *_train_metric_keys,
             writer=self.writer,
         )
         self.epoch_train_metrics = MetricTracker(*_train_metric_keys, writer=None)
-        
 
-        def _metric_keys_for_partition(part_name):
-            partition_metrics = self.metrics.get(part_name, [])
-            return [m.name for m in partition_metrics if not isinstance(m, EpochMetric)]
-
-        # Set num_classes on metrics from datasets
-        for part in ["val", "test"]:
-            if part in self.evaluation_dataloaders:
-                num_classes = self.evaluation_dataloaders[part].dataset.num_classes
-                for met in self.metrics.get(part, []):
-                    if hasattr(met, "num_classes"):
-                        met.num_classes = num_classes
-                    
-
-        self.val_metrics = MetricTracker(*_metric_keys_for_partition("val"), writer=self.writer)
-
-        self.backend_metric_objects = []
-        for backend in self.backends:
-            mets = [copy.deepcopy(met) for met in self.metrics.get("test", [])]
-            self.backend_metric_objects.append(mets)
-
-        # Set num_classes on backend metrics
-        for part in ["val", "test"]:
-            if part in self.evaluation_dataloaders:
-                num_classes = self.evaluation_dataloaders[part].dataset.num_classes
-                for i, backend_mets in enumerate(self.backend_metric_objects):
-                    for met in backend_mets:
-                        if hasattr(met, "num_classes"):
-                            met.num_classes = num_classes
-
-        backend_keys = []
-        for i, mets in enumerate(self.backend_metric_objects):
-            for met in mets:
-                if not isinstance(met, EpochMetric):
-                    backend_keys.append(f"backend_{i}_{met.name}")
-        self.test_metrics = MetricTracker(*_metric_keys_for_partition("test"), *backend_keys, writer=self.writer)
-
+        self.val_metric_objects = self.metrics.get("val", [])
+        self.val_metrics = MetricTracker(
+            *self.metric_keys.get("val", []),
+            writer=self.writer,
+        )
+        self.test_metrics = {}
+        for backend_name in self.backend_keys:
+            self.test_metrics[backend_name] = MetricTracker(
+                *self.metric_keys.get("test_backends", {}).get(backend_name, []),
+                writer=self.writer,
+            )
         self.checkpoint_dir = (
             ROOT_PATH / config.trainer.save_dir / config.writer.logger.run_name
         )
@@ -190,21 +131,11 @@ class BaseTrainer:
             self._from_pretrained(config.trainer.get("from_pretrained"))
 
     def _autocast(self):
-        """Trainer overrides with AMP autocast when enabled."""
+        """Input: none. Output: autocast context manager."""
         return contextlib.nullcontext()
 
     def _collect_embeddings(self, dataloader, max_samples: int = None, max_batches: int = None):
-        """Collect embeddings and labels from dataloader.
-        
-        Args:
-            dataloader: Data loader to collect from.
-            max_samples: Max total samples to collect. If None, collect all.
-            max_batches: Max batches to process. If None, process all.
-            
-        Returns:
-            embeddings (Tensor): [N, embedding_dim]
-            labels (Tensor): [N]
-        """
+        """Input: dataloader. Output: embeddings tensor and labels tensor."""
         embs, labs = [], []
         n = 0
         self.model.eval()
@@ -261,7 +192,7 @@ class BaseTrainer:
                 )
 
     def update_train_dataloader(self):
-        """Update training dataloader with batch sampler based on criterion weights."""
+        """Input: current criterion weights. Output: refreshed train dataloader."""
         similarity_matrix = self.criterion.embedding.weight @ self.criterion.embedding.weight.T
         batch_sampler = instantiate(
             self.config.batch_sampler.sampler,
@@ -283,9 +214,7 @@ class BaseTrainer:
             self.train_dataloader = inf_loop(new_dataloader)
 
     def train(self):
-        """
-        Wrapper around training process to save model on keyboard interrupt.
-        """
+        """Input: none. Output: executed training loop."""
         try:
             self._train_process()
         except KeyboardInterrupt as e:
@@ -294,28 +223,18 @@ class BaseTrainer:
             raise e
 
     def _train_process(self):
-        """
-        Full training logic:
-
-        Training model for an epoch, evaluating it on non-train partitions,
-        and monitoring the performance improvement (for early stopping
-        and saving the best checkpoint).
-        """
+        """Input: none. Output: epoch-wise train/eval with checkpointing."""
         not_improved_count = 0
         for epoch in range(self.start_epoch, self.epochs + 1):
             self._last_epoch = epoch
             result = self._train_epoch(epoch)
-            # logging embeddings (PCA 3D) + W&B epoch_summary scalars
             self._wandb_after_train_epoch(epoch, result)
             logs = {"epoch": epoch}
             logs.update(result)
 
-            
             for key, value in logs.items():
                 self.logger.info(f"    {key:15s}: {value}")
 
-            
-            
             best, stop_process, not_improved_count = self._monitor_performance(
                 logs, not_improved_count
             )
@@ -323,20 +242,11 @@ class BaseTrainer:
             if epoch % self.save_period == 0 or best:
                 self._save_checkpoint(epoch, save_best=best, only_best=True)
 
-            if stop_process:  
+            if stop_process:
                 break
 
     def _train_epoch(self, epoch):
-        """
-        Training logic for an epoch, including logging and evaluation on
-        non-train partitions.
-
-        Args:
-            epoch (int): current training epoch.
-        Returns:
-            logs (dict): logs that contain the average loss and metric in
-                this epoch.
-        """
+        """Input: epoch index. Output: train and eval logs for epoch."""
         self.is_train = True
         self.model.train()
         self.train_metrics.reset()
@@ -356,7 +266,7 @@ class BaseTrainer:
             except torch.cuda.OutOfMemoryError as e:
                 if self.skip_oom:
                     self.logger.warning("OOM on batch. Skipping batch.")
-                    torch.cuda.empty_cache()  
+                    torch.cuda.empty_cache()
                     continue
                 else:
                     raise e
@@ -383,7 +293,6 @@ class BaseTrainer:
 
         logs = self.epoch_train_metrics.result()
 
-        
         for part, dataloader in self.evaluation_dataloaders.items():
             part_logs = self._evaluation_epoch(epoch, part, dataloader)
             logs.update(**{f"{part}_{name}": value for name, value in part_logs.items()})
@@ -393,38 +302,27 @@ class BaseTrainer:
         return logs
 
     def _reset_stateful_metrics(self):
-        """
-        Reset stateful torchmetrics at the end of epoch.
-        This ensures clean state for next epoch.
-        """
-        for metric_list in self.metrics.values():
+        """Input: metric objects. Output: metrics reset for next epoch."""
+        metric_lists = [self.metrics.get("train", []), self.metrics.get("val", [])]
+        metric_lists.extend(self.backend_metric_objects.values())
+        for metric_list in metric_lists:
             for met in metric_list:
                 if hasattr(met, "metric") and hasattr(met.metric, "reset"):
                     met.metric.reset()
 
     def _evaluation_epoch(self, epoch, part, dataloader):
-        """
-        Evaluate model on the partition after training for an epoch.
-        
-        For val partition: collects embeddings and fits backends, then evaluates metrics for main and each backend.
-        For test partition: uses fitted backends to compute metrics for main and each backend.
-
-        Args:
-            epoch (int): current training epoch.
-            part (str): partition to evaluate on
-            dataloader (DataLoader): dataloader for the partition.
-        Returns:
-            logs (dict): logs that contain the information about evaluation.
-        """
+        """Input: epoch, partition, dataloader. Output: partition evaluation logs."""
         self.is_train = False
         self.model.eval()
+        self.current_eval_part = part
         metrics_for_part = self.metrics.get(part, [])
+        if not isinstance(metrics_for_part, list):
+            metrics_for_part = []
         batch_metrics = [m for m in metrics_for_part if not isinstance(m, EpochMetric)]
         epoch_metrics = [m for m in metrics_for_part if isinstance(m, EpochMetric)]
 
         logs = {}
 
-        # First, collect embeddings for fitting backends on val
         if part == "val" and self.backends:
             all_embeddings = []
             all_labels = []
@@ -451,7 +349,6 @@ class BaseTrainer:
                     except Exception as e:
                         self.logger.error(f"Error fitting backend: {e}")
 
-        # Compute metrics for main (only for val)
         if part == "val":
             self.val_metrics.reset()
             all_predictions = []
@@ -485,7 +382,6 @@ class BaseTrainer:
                             self.writer.add_scalar(k, v)
                 met.reset()
 
-            # Log confusion matrix for main
             if all_predictions and all_labels:
                 all_predictions_cat = torch.cat(all_predictions, dim=0)
                 all_labels_cat = torch.cat(all_labels, dim=0)
@@ -493,16 +389,15 @@ class BaseTrainer:
                     self.writer.set_step(epoch * self.epoch_len, part)
                     self.writer.add_confusion_matrix_image("confusion_matrix", preds=all_predictions_cat, labels=all_labels_cat, title=f"{part} epoch {epoch}")
 
-        # Compute metrics for each backend (for val and test)
-        for i, backend in enumerate(self.backends):
+        for backend_name, backend in zip(self.backend_keys, self.backends):
             if hasattr(backend, '_is_fitted') and backend._is_fitted:
-                backend_metric_names = [m.name for m in self.backend_metric_objects[i] if not isinstance(m, EpochMetric)]
-                backend_metrics = MetricTracker(*backend_metric_names, writer=self.writer)
+                backend_metrics = self.test_metrics.get(backend_name)
                 backend_metrics.reset()
+                backend_metric_objects = self.backend_metric_objects.get(backend_name, [])
                 all_backend_preds = []
                 all_labels = []
                 with torch.no_grad():
-                    for batch_idx, batch in tqdm(enumerate(dataloader), desc=f"{part} backend {i}", total=len(dataloader)):
+                    for batch_idx, batch in tqdm(enumerate(dataloader), desc=f"{part} backend {backend_name}", total=len(dataloader)):
                         batch = self.move_batch_to_device(batch)
                         batch = self.transform_batch(batch)
                         with self._autocast():
@@ -520,7 +415,7 @@ class BaseTrainer:
                             else:
                                 all_losses = self.criterion(**batch)
                                 batch.update(all_losses)
-                        for met in self.backend_metric_objects[i]:
+                        for met in backend_metric_objects:
                             if met.name == "confusion_matrix" or isinstance(met, EpochMetric):
                                 met(**batch)
                             else:
@@ -539,46 +434,36 @@ class BaseTrainer:
                     self.writer.set_step(epoch * self.epoch_len, part)
                     self._log_scalars(backend_metrics)
                 backend_results = backend_metrics.result()
-                logs.update(**{f"backend_{i}_{name}": value for name, value in backend_results.items()})
-                for met in self.backend_metric_objects[i]:
+                logs.update(**{f"{backend_name}_{name}": value for name, value in backend_results.items()})
+                for met in backend_metric_objects:
                     if isinstance(met, EpochMetric):
                         extra = met.finalize()
-                        logs.update(**{f"backend_{i}_{k}": v for k, v in extra.items()})
+                        logs.update(**{f"{backend_name}_{k}": v for k, v in extra.items()})
                         if self.writer is not None:
                             self.writer.set_step(epoch * self.epoch_len, part)
                             for k, v in extra.items():
                                 if isinstance(v, torch.Tensor) and v.numel() == 1:
                                     v = float(v.detach().cpu().item())
                                 if isinstance(v, (float, int)) and not (isinstance(v, float) and v != v):
-                                    self.writer.add_scalar(f"backend_{i}_{k}", v)
+                                    self.writer.add_scalar(f"{backend_name}_{k}", v)
                         met.reset()
-                # Log confusion matrix for backend
                 if all_backend_preds and all_labels:
                     all_backend_preds_cat = torch.cat(all_backend_preds, dim=0)
                     all_labels_cat = torch.cat(all_labels, dim=0)
                     if self.writer is not None and getattr(self.writer, "wandb", None) is not None and cfg_get(self.config, "writer.log_confusion_matrix_image", True) and hasattr(self.writer, "add_confusion_matrix_image"):
                         self.writer.set_step(epoch * self.epoch_len, part)
-                        self.writer.add_confusion_matrix_image(f"confusion_matrix_backend_{i}", preds=all_backend_preds_cat, labels=all_labels_cat, title=f"{part} backend {i} epoch {epoch}")
+                        self.writer.add_confusion_matrix_image(
+                            f"confusion_matrix_{backend_name}",
+                            preds=all_backend_preds_cat,
+                            labels=all_labels_cat,
+                            title=f"{part} backend {backend_name} epoch {epoch}",
+                        )
 
+        self.current_eval_part = None
         return logs
 
     def _monitor_performance(self, logs, not_improved_count):
-        """
-        Check if there is an improvement in the metrics. Used for early
-        stopping and saving the best checkpoint.
-
-        Args:
-            logs (dict): logs after training and evaluating the model for
-                an epoch.
-            not_improved_count (int): the current number of epochs without
-                improvement.
-        Returns:
-            best (bool): if True, the monitored metric has improved.
-            stop_process (bool): if True, stop the process (early stopping).
-                The metric did not improve for too much epochs.
-            not_improved_count (int): updated number of epochs without
-                improvement.
-        """
+        """Input: logs and patience state. Output: best flag, stop flag, counter."""
         best = False
         stop_process = False
         if self.mnt_mode != "off":
@@ -613,36 +498,13 @@ class BaseTrainer:
         return best, stop_process, not_improved_count
 
     def move_batch_to_device(self, batch):
-        """
-        Move all necessary tensors to the device.
-
-        Args:
-            batch (dict): dict-based batch containing the data from
-                the dataloader.
-        Returns:
-            batch (dict): dict-based batch containing the data from
-                the dataloader with some of the tensors on the device.
-        """
+        """Input: batch dict. Output: batch with tensors moved to device."""
         for tensor_for_device in self.cfg_trainer.device_tensors:
             batch[tensor_for_device] = batch[tensor_for_device].to(self.device)
         return batch
 
     def transform_batch(self, batch):
-        """
-        Transforms elements in batch. Like instance transform inside the
-        BaseDataset class, but for the whole batch. Improves pipeline speed,
-        especially if used with a GPU.
-
-        Each tensor in a batch undergoes its own transform defined by the key.
-
-        Args:
-            batch (dict): dict-based batch containing the data from
-                the dataloader.
-        Returns:
-            batch (dict): dict-based batch containing the data from
-                the dataloader (possibly transformed via batch transform).
-        """
-        
+        """Input: batch dict. Output: batch after optional batch transforms."""
         transform_type = "train" if self.is_train else "inference"
         transforms = self.batch_transforms.get(transform_type)
         if transforms is not None:
@@ -653,10 +515,7 @@ class BaseTrainer:
         return batch
 
     def _clip_grad_norm(self):
-        """
-        Clips the gradient norm by the value defined in
-        config.trainer.max_grad_norm
-        """
+        """Input: gradients. Output: gradients clipped by configured max norm."""
         if self.config["trainer"].get("max_grad_norm", None) is not None:
             clip_grad_norm_(
                 self.model.parameters(), self.config["trainer"]["max_grad_norm"]
@@ -664,18 +523,11 @@ class BaseTrainer:
 
     @torch.no_grad()
     def _get_grad_norm(self, norm_type=2):
-        """
-        Calculates the gradient norm for logging.
-
-        Args:
-            norm_type (float | str | None): the order of the norm.
-        Returns:
-            total_norm (float): the calculated norm.
-        """
+        """Input: norm type. Output: scalar gradient norm."""
         parameters = self.model.parameters()
         if isinstance(parameters, torch.Tensor):
             parameters = [parameters]
-        parameters = [p for p in parameters if p.grad is not None]        
+        parameters = [p for p in parameters if p.grad is not None]
         total_norm = torch.norm(
             torch.stack([torch.norm(p.grad.detach(), norm_type) for p in parameters]),
             norm_type,
@@ -683,15 +535,7 @@ class BaseTrainer:
         return total_norm.item()
 
     def _progress(self, batch_idx):
-        """
-        Calculates the percentage of processed batch within the epoch.
-
-        Args:
-            batch_idx (int): the current batch index.
-        Returns:
-            progress (str): contains current step and percentage
-                within the epoch.
-        """
+        """Input: batch index. Output: formatted progress string."""
         base = "[{}/{} ({:.0f}%)]"
         if hasattr(self.train_dataloader, "n_samples"):
             current = batch_idx * self.train_dataloader.batch_size
@@ -703,44 +547,18 @@ class BaseTrainer:
 
     @abstractmethod
     def _log_batch(self, batch_idx, batch, mode="train"):
-        """
-        Abstract method. Should be defined in the nested Trainer Class.
-
-        Log data from batch. Calls self.writer.add_* to log data
-        to the experiment tracker.
-
-        Args:
-            batch_idx (int): index of the current batch.
-            batch (dict): dict-based batch after going through
-                the 'process_batch' function.
-            mode (str): train or inference. Defines which logging
-                rules to apply.
-        """
+        """Input: batch index/data and mode. Output: logged batch artifacts."""
         return NotImplementedError()
 
     def _log_scalars(self, metric_tracker: MetricTracker):
-        """
-        Wrapper around the writer 'add_scalar' to log all metrics.
-
-        Args:
-            metric_tracker (MetricTracker): calculated metrics.
-        """
+        """Input: metric tracker. Output: scalar metrics logged to writer."""
         if self.writer is None:
             return
         for metric_name in metric_tracker.keys():
             self.writer.add_scalar(f"{metric_name}", metric_tracker.avg(metric_name))
 
     def _save_checkpoint(self, epoch, save_best=False, only_best=False):
-        """
-        Save the checkpoints.
-
-        Args:
-            epoch (int): current epoch number.
-            save_best (bool): if True, rename the saved checkpoint to 'model_best.pth'.
-            only_best (bool): if True and the checkpoint is the best, save it only as
-                'model_best.pth'(do not duplicate the checkpoint as
-                checkpoint-epochEpochNumber.pth)
-        """
+        """Input: epoch and save flags. Output: checkpoint files written."""
         arch = type(self.model).__name__
         state = {
             "arch": arch,
@@ -766,24 +584,13 @@ class BaseTrainer:
             self.logger.info("Saving current best: model_best.pth ...")
 
     def _resume_checkpoint(self, resume_path):
-        """
-        Resume from a saved checkpoint (in case of server crash, etc.).
-        The function loads state dicts for everything, including model,
-        optimizers, etc.
-
-        Notice that the checkpoint should be located in the current experiment
-        saved directory (where all checkpoints are saved in '_save_checkpoint').
-
-        Args:
-            resume_path (str): Path to the checkpoint to be resumed.
-        """
+        """Input: checkpoint path. Output: restored model/optimizer/scheduler."""
         resume_path = str(resume_path)
         self.logger.info(f"Loading checkpoint: {resume_path} ...")
         checkpoint = torch.load(resume_path, self.device)
         self.start_epoch = checkpoint["epoch"] + 1
         self.mnt_best = checkpoint["monitor_best"]
 
-        
         if checkpoint["config"]["model"] != self.config["model"]:
             self.logger.warning(
                 "Warning: Architecture configuration given in the config file is different from that "
@@ -813,18 +620,9 @@ class BaseTrainer:
         )
 
     def _from_pretrained(self, pretrained_path):
-        """
-        Init model with weights from pretrained pth file.
-
-        Notice that 'pretrained_path' can be any path on the disk. It is not
-        necessary to locate it in the experiment saved dir. The function
-        initializes only the model.
-
-        Args:
-            pretrained_path (str): path to the model state dict.
-        """
+        """Input: pretrained checkpoint path. Output: loaded model weights."""
         pretrained_path = str(pretrained_path)
-        if hasattr(self, "logger"):  
+        if hasattr(self, "logger"):
             self.logger.info(f"Loading model weights from: {pretrained_path} ...")
         else:
             print(f"Loading model weights from: {pretrained_path} ...")

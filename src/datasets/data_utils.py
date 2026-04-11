@@ -1,53 +1,110 @@
+import json
+import os
+from copy import deepcopy
 from itertools import repeat
+from pathlib import Path
+from typing import Dict, List, Optional
 
+import cv2
+import numpy as np
+import pandas as pd
+import soundfile as sf
+import yadisk
 from hydra.utils import instantiate
+from pytubefix import YouTube
+from pytubefix.cli import on_progress
 
 from src.datasets.collate import collate_fn
 from src.utils.init_utils import set_worker_seed
-import pandas as pd
-from typing import Optional
-from pathlib import Path
-import yadisk
-import os
-import json
-from pathlib import Path
-from typing import List, Dict
-from pytubefix import YouTube
-from pytubefix.cli import on_progress
-import soundfile as sf
-import numpy as np
-import cv2
+
+
+def _non_epoch_metric_names(metric_list):
+    from src.metrics.epoch_metric import EpochMetric
+
+    return [m.name for m in metric_list if not isinstance(m, EpochMetric)]
+
+
+def _build_backend_keys(backends):
+    backend_name_counts = {}
+    backend_keys = []
+    for backend in backends:
+        base_name = backend.__class__.__name__
+        count = backend_name_counts.get(base_name, 0) + 1
+        backend_name_counts[base_name] = count
+        backend_keys.append(base_name if count == 1 else f"{base_name}_{count}")
+    return backend_keys
+
+
+def metric_keys_for_partition(metrics, part_name):
+    """Input: metrics dict, partition name. Output: non-epoch metric names."""
+    from src.metrics.epoch_metric import EpochMetric
+
+    partition_metrics = metrics.get(part_name, [])
+    if isinstance(partition_metrics, dict):
+        partition_metrics = partition_metrics.get("main", [])
+    return [m.name for m in partition_metrics if not isinstance(m, EpochMetric)]
+
+
+def _set_num_classes_on_metric_cfg(metric_cfg, num_classes):
+    if not hasattr(metric_cfg, "get"):
+        return
+    if metric_cfg.get("_target_") == "src.metrics.ClassificationMetric":
+        classification_metric_cfg = metric_cfg.get("classification_metric")
+        if classification_metric_cfg is not None and hasattr(classification_metric_cfg, "__setitem__"):
+            classification_metric_cfg["num_classes"] = num_classes
+    if "num_classes" in metric_cfg:
+        metric_cfg["num_classes"] = num_classes
+
+
+def get_metrics_and_backends(config, dataloaders):
+    """Input: config and dataloaders. Output: instantiated metrics and backends."""
+    metrics_cfg = deepcopy(config.metrics)
+
+    for part in ["val", "test"]:
+        if part in dataloaders and part in metrics_cfg:
+            num_classes = dataloaders[part].dataset.num_classes
+            for met_cfg in metrics_cfg[part]:
+                _set_num_classes_on_metric_cfg(met_cfg, num_classes)
+
+    metrics = instantiate(metrics_cfg)
+    backends = []
+    if config.get("backends") is not None:
+        backends = instantiate(config.backends)
+    backend_keys = _build_backend_keys(backends)
+    train_metric_objects = metrics.get("train", [])
+    val_metric_objects = metrics.get("val", [])
+    test_metric_objects = metrics.get("test", [])
+    backend_metric_objects = {}
+    backend_metric_names = {}
+    if backends and isinstance(test_metric_objects, list):
+        for backend_key in backend_keys:
+            per_backend_metrics = deepcopy(test_metric_objects)
+            backend_metric_objects[backend_key] = per_backend_metrics
+            backend_metric_names[backend_key] = _non_epoch_metric_names(per_backend_metrics)
+    prepared_metrics = {
+        "train": train_metric_objects,
+        "val": val_metric_objects,
+        "test": {"backends": backend_metric_objects},
+        "metric_keys": {
+            "train": _non_epoch_metric_names(train_metric_objects),
+            "val": _non_epoch_metric_names(val_metric_objects),
+            "test_backends": backend_metric_names,
+        },
+        "backend_keys": backend_keys,
+    }
+    if "inference" in metrics:
+        prepared_metrics["inference"] = metrics["inference"]
+        prepared_metrics["metric_keys"]["inference"] = _non_epoch_metric_names(metrics["inference"])
+    return prepared_metrics, backends
 
 def inf_loop(dataloader):
-    """
-    Wrapper function for endless dataloader.
-    Used for iteration-based training scheme.
-
-    Args:
-        dataloader (DataLoader): classic finite dataloader.
-    """
+    """Input: finite dataloader. Output: endless dataloader iterator."""
     for loader in repeat(dataloader):
         yield from loader
 
 
 def move_batch_transforms_to_device(batch_transforms, device):
-    """
-    Move batch_transforms to device.
-
-    Notice that batch transforms are applied on the batch
-    that may be on GPU. Therefore, it is required to put
-    batch transforms on the device. We do it here.
-
-    Batch transforms are required to be an instance of nn.Module.
-    If several transforms are applied sequentially, use nn.Sequential
-    in the config (not torchvision.Compose).
-
-    Args:
-        batch_transforms (dict[Callable] | None): transforms that
-            should be applied on the whole batch. Depend on the
-            tensor name.
-        device (str): device to use for batch transforms.
-    """
+    """Input: transform mapping and device. Output: transforms moved to device."""
     for transform_type in batch_transforms.keys():
         transforms = batch_transforms.get(transform_type)
         if transforms is not None:
@@ -56,28 +113,10 @@ def move_batch_transforms_to_device(batch_transforms, device):
 
 
 def get_dataloaders(config, device):
-    """
-    Create dataloaders for each of the dataset partitions.
-    Also creates instance and batch transforms.
-
-    Args:
-        config (DictConfig): hydra experiment config.
-        device (str): device to use for batch transforms.
-    Returns:
-        dataloaders (dict[DataLoader]): dict containing dataloader for a
-            partition defined by key.
-        batch_transforms (dict[Callable] | None): transforms that
-            should be applied on the whole batch. Depend on the
-            tensor name.
-    """
-    # transforms or augmentations init
+    """Input: config and device. Output: dataloaders and batch transforms."""
     batch_transforms = instantiate(config.transforms.batch_transforms)
     move_batch_transforms_to_device(batch_transforms, device)
-
-    # dataset partitions init
-    datasets = instantiate(config.datasets)  # instance transforms are defined inside
-
-    # dataloaders init
+    datasets = instantiate(config.datasets)
     dataloaders = {}
     for dataset_partition in config.datasets.keys():
         dataset = datasets[dataset_partition]
@@ -97,8 +136,6 @@ def get_dataloaders(config, device):
         partition_dataloader = instantiate(config.dataloader.dataloader_standard, **dataloader_kwargs)
         dataloaders[dataset_partition] = partition_dataloader
     return dataloaders, batch_transforms
-
-#also everywhere extract yandex_token with os.get_env 
 
 class CsvChunkDownloader:
     def __init__(
@@ -326,9 +363,7 @@ def _download_video(video_id: str, out_path: Path):
 
 
 def _extract_audio_from_video(video_path: Path):
-    """
-    Extract audio using soundfile (works if backend supports codec).
-    """
+    """Input: video path. Output: waveform and sample rate."""
     waveform, sr = sf.read(video_path)
     return waveform, sr
 
@@ -361,7 +396,8 @@ def youtube_download(
             return []
         tracker.mark_started(video_id, {"breed": breed, "segments": segments})
         if bad_videos_path.exists():
-            bad_videos = set(json.load(open(bad_videos_path)))
+            with open(bad_videos_path) as f:
+                bad_videos = set(json.load(f))
         else:
             bad_videos = set()
 
@@ -401,7 +437,6 @@ def youtube_download(
 
         outputs = []
 
-        # ---- AUDIO PROCESSING ----
         for seg_idx, (start, end) in enumerate(segments):
             duration = end - start
             audio_path = video_dir / f"{seg_idx}_{start}_{end}.wav"
@@ -423,7 +458,6 @@ def youtube_download(
                 "audio_len": float(duration),
             }
 
-            # ---- FRAME EXTRACTION (cv2) ----
             if not audio_only:
                 seg_frame_dir = frame_dir / f"{seg_idx}_{start}_{end}"
                 seg_frame_dir.mkdir(parents=True, exist_ok=True)
@@ -445,7 +479,6 @@ def youtube_download(
                         if not ret:
                             break
 
-                        # save 1 FPS (you can adjust)
                         if frame_idx % int(fps) == 0:
                             frame_path = seg_frame_dir / f"frame_{saved_idx:04d}.jpg"
                             cv2.imwrite(str(frame_path), frame)
@@ -455,8 +488,10 @@ def youtube_download(
 
                 cap.release()
 
-            entry_out["frames_path"] = str(seg_frame_dir.absolute())
+            if not audio_only:
+                entry_out["frames_path"] = str(seg_frame_dir.absolute())
+            outputs.append(entry_out)
 
-        outputs.append(entry_out)
+        tracker.mark_done(video_id, {"breed": breed, "segments_count": len(segments)})
+        return outputs
 
-    return outputs

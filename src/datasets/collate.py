@@ -24,23 +24,20 @@ def collate_fn(dataset_items: list[dict]):
         values = [item[key] for item in dataset_items]
 
         if key == "audio":
-            # Store original lengths before padding
-            audio_lengths = [len(audio) for audio in values]
+            transposed = [v.T for v in values]
+            audio_lengths = [t.shape[0] for t in transposed]
             batch["audio_lengths"] = torch.tensor(audio_lengths)
-            batch[key] = pad_sequence(values, batch_first=True)
+            batch[key] = pad_sequence(transposed, batch_first=True)  
         elif key == "spectral_feat":
-            # Store original lengths before padding
-            spectral_lengths = [v.shape[1] for v in values]  # Assuming shape is (n_mels, time)
+            spectral_lengths = [v.shape[1] for v in values]
             batch["spectral_feat_lengths"] = torch.tensor(spectral_lengths)
-            transposed = [v.T for v in values] 
-            padded = pad_sequence(transposed, batch_first=True)  
-            batch[key] = padded.permute(0, 2, 1)  
+            transposed = [v.T for v in values]
+            padded = pad_sequence(transposed, batch_first=True)
+            batch[key] = padded.permute(0, 2, 1)   
         elif key == "label":
             batch[key] = torch.tensor(values)
         elif key == "breed":
-            # Breed is stored as index, convert to tensor
             batch[key] = torch.tensor(values, dtype=torch.long)
         else:
             batch[key] = values
-
     return batch

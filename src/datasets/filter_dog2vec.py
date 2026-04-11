@@ -92,16 +92,12 @@ def download_info_youtube():
                 for video_id in tqdm(data.keys(), desc=f"Processing {breed} videos", leave=False):
                     if video_id in processed_ids:
                         continue
-
-                    # Check if already processed
                     status = tracker.get_status(video_id)
                     if status == "completed":
                         processed_ids.add(video_id)
                         continue
 
                     segments = data[video_id]
-
-                    # Fetch YouTube metadata
                     title = ""
                     description = ""
                     try:
@@ -217,3 +213,30 @@ def final_filter_result(
     with FILEDownloader(FINAL_JSON) as fd:
         with open(FINAL_JSON, "w") as f:
             json.dump(final_entries, f, indent=2)
+if __name__ == "__main__":
+    import argparse
+    import os
+    parser = argparse.ArgumentParser(description="Dog2Vec dataset preparation pipeline")
+    parser.add_argument(
+        "--max_videos_per_breed_context",
+        type=int,
+        default=5,
+        help="Maximum number of videos per breed-context combination (default: 5)"
+    )
+    parser.add_argument(
+        "--yandex_token",
+        type=str,
+        default=None,
+        help="Yandex Disk token for uploading/downloading tracker and CSV files"
+    )
+    args = parser.parse_args()
+
+    if args.yandex_token:
+        os.environ["YANDEX_TOKEN"] = args.yandex_token
+
+    print("Running Dog2Vec pipeline...")
+    download_raw_jsons()
+    download_info_youtube()
+    final_filter_result(
+        max_videos_per_breed_context=args.max_videos_per_breed_context
+    )

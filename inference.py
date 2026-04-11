@@ -15,16 +15,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 
 def fit_backend_on_dataset(model, backend, config, device, dataset_name):
-    """
-    Collect embeddings from a dataset and fit the backend on them.
-    
-    Args:
-        model: PyTorch model
-        backend: Backend to fit (if it has a fit method)
-        config: Hydra config
-        device: Device to use
-        dataset_name: Name of the dataset to use for backend training
-    """
+    """Input: model, backend, config, dataset name. Output: fitted backend."""
     if backend is None or not hasattr(backend, "fit"):
         return
     print(f"\nCollecting embeddings from '{dataset_name}' dataset for backend training...")
@@ -57,7 +48,6 @@ def fit_backend_on_dataset(model, backend, config, device, dataset_name):
                 emb = outputs.get("embedding")
                 if emb is None:
                     emb = outputs.get("logits")
-                
                 if emb is not None:
                     embeddings_list.append(emb.detach().cpu())
                     if "label" in batch:
@@ -69,14 +59,7 @@ def fit_backend_on_dataset(model, backend, config, device, dataset_name):
 
 @hydra.main(version_base=None, config_path="src/configs", config_name="inference")
 def main(config):
-    """
-    Main script for inference. Instantiates the model, metrics, and
-    dataloaders. Runs Inferencer to calculate metrics and (or)
-    save predictions.
-
-    Args:
-        config (DictConfig): hydra experiment config.
-    """
+    """Input: Hydra config. Output: inference metrics and saved predictions."""
     set_random_seed(config.inferencer.seed)
 
     if config.inferencer.device == "auto":
@@ -84,15 +67,11 @@ def main(config):
     else:
         device = config.inferencer.device
 
-    # setup data_loader instances
-    # batch_transforms should be put on device
     dataloaders, batch_transforms = get_dataloaders(config, device)
 
-    # build model architecture, then print to console
     model = instantiate(config.model).to(device)
     print(model)
 
-    # get metrics
     metrics = instantiate(config.metrics)
     backend = None
     if config.get("backends") is not None:
