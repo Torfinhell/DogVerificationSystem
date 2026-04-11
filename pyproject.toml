@@ -24,4 +24,5 @@ dependencies = [
     "torchcodec>=0.11.0",
     "kagglehub>=1.0.0",
     "opencv-python>=4.13.0.92",
+    "pydub>=0.25.1",
 ]
