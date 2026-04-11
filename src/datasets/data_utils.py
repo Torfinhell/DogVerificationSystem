@@ -269,11 +269,17 @@ class FILETracker:
         if self.yandex_token is not None and self.download_from_disk:
             remote_path = f"/{self.tracker_path.name}"
             with self.client:
-                if self.client.exists(remote_path):
-                    print(f"Downloading tracker {remote_path} from Yandex.Disk")
-                    self.client.download(str(self.tracker_path), str(self.tracker_path))
-                else:
-                    print(f"Tracker {remote_path} not found on Yandex.Disk, starting fresh")
+                try:
+                    if self.client.exists(remote_path):
+                        print(f"Downloading tracker {remote_path} from Yandex.Disk")
+                        self.client.download(str(self.tracker_path), str(self.tracker_path))
+                    else:
+                        print(f"Tracker {remote_path} not found on Yandex.Disk, starting fresh")
+                except yadisk.exceptions.PathNotFoundError:
+                    # exists() returned True but file actually missing (possible bug)
+                    print(f"Tracker {remote_path} not found (404), starting fresh")
+                except Exception as e:
+                    print(f"Unexpected error accessing Yandex.Disk: {e}, continuing without sync")
 
     def save(self):
         self.tracker_path.parent.mkdir(parents=True, exist_ok=True)
