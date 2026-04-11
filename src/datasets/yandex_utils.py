@@ -101,6 +101,15 @@ class FILEDownloader:
         return False
 
 
+import json
+import os
+import tempfile
+from pathlib import Path
+from typing import Optional
+
+import yadisk
+
+
 class FILETracker:
     def __init__(self, tracker_path: str | Path, download_from_disk: bool = True):
         self.tracker_path = Path(tracker_path)
@@ -111,51 +120,84 @@ class FILETracker:
             "completed": {},
             "failed": {},
             "skipped": {},
+            "version": 0,
         }
         if self.yandex_token is not None:
             self.client = yadisk.Client(token=self.yandex_token)
 
+    def _download(self):
+        """Download remote tracker and replace local data if remote version is newer."""
+        if self.yandex_token is None or not self.download_from_disk:
+            return
+        remote_path = f"/{self.tracker_path.as_posix()}"
+        with self.client:
+            if self.client.exists(remote_path):
+                # Download to a temporary file
+                with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                    tmp_path = Path(tmp.name)
+                self.client.download(remote_path, str(tmp_path))
+                with open(tmp_path, 'r') as f:
+                    remote_data = json.load(f)
+                tmp_path.unlink()
+                # Only replace if remote has a newer version
+                if remote_data.get("version", 0) > self.data.get("version", 0):
+                    self.data = remote_data
+
+    def _upload(self):
+        """Upload current data to remote, incrementing version."""
+        if self.yandex_token is None:
+            return
+        self.data["version"] = self.data.get("version", 0) + 1
+        remote_path = f"/{self.tracker_path.as_posix()}"
+        with self.client:
+            # Ensure remote directory exists
+            remote_dir = Path(remote_path).parent
+            if remote_dir.as_posix() != "/" and not self.client.exists(remote_dir.as_posix()):
+                self.client.makedirs(remote_dir.as_posix())
+            # Write to a temporary file then upload
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as tmp:
+                json.dump(self.data, tmp, indent=2)
+                tmp_path = Path(tmp.name)
+            self.client.upload(str(tmp_path), remote_path, overwrite=True)
+            tmp_path.unlink()
+
     def __enter__(self):
-        if self.yandex_token is not None and self.download_from_disk:
-            remote_path = f"/{self.tracker_path.as_posix()}"
-            with self.client:
-                self.tracker_path.parent.mkdir(parents=True, exist_ok=True)
-                if self.client.exists(remote_path):
-                    print(f"Downloading tracker {remote_path} from Yandex.Disk")
-                    self.client.download(remote_path, str(self.tracker_path))
-                else:
-                    print(f"Tracker {remote_path} not found on Yandex.Disk, starting fresh")
+        self._download()
         return self
 
-    def save(self):
-        self.tracker_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.tracker_path.open("w") as f:
-            json.dump(self.data, f, indent=2)
+    def __exit__(self, exc_type, exc_value, traceback):
+        self._upload()
+        return False
 
-        if self.yandex_token is not None:
-            remote_path = f"/{self.tracker_path.as_posix()}"
-            with self.client:
-                remote_dir = Path(remote_path).parent
-                if remote_dir.as_posix() != "/" and not self.client.exists(remote_dir.as_posix()):
-                    self.client.makedirs(remote_dir.as_posix())
-                self.client.upload(str(self.tracker_path), remote_path, overwrite=True)
+    def save(self):
+        """Explicitly upload current state."""
+        self._upload()
 
     def mark_started(self, video_id: str, info: dict | None = None) -> None:
+        self._download()
         self.data["in_progress"][video_id] = {"status": "in_progress", "info": info or {}}
+        self._upload()
 
     def mark_done(self, video_id: str, info: dict | None = None) -> None:
+        self._download()
         self.data["in_progress"].pop(video_id, None)
         self.data["completed"][video_id] = {"status": "completed", "info": info or {}}
+        self._upload()
 
     def mark_failed(self, video_id: str, reason: str | None = None, info: dict | None = None) -> None:
+        self._download()
         self.data["in_progress"].pop(video_id, None)
         self.data["failed"][video_id] = {"status": "failed", "reason": reason, "info": info or {}}
+        self._upload()
 
     def mark_skipped(self, video_id: str, reason: str | None = None, info: dict | None = None) -> None:
+        self._download()
         self.data["in_progress"].pop(video_id, None)
         self.data["skipped"][video_id] = {"status": "skipped", "reason": reason, "info": info or {}}
+        self._upload()
 
     def get_status(self, video_id: str) -> str:
+        self._download()
         if video_id in self.data["completed"]:
             return "completed"
         if video_id in self.data["failed"]:
@@ -167,8 +209,6 @@ class FILETracker:
         return "unknown"
 
     def summary(self) -> dict:
-        return {key: len(value) for key, value in self.data.items()}
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.save()
-        return False
+        self._download()
+        # Exclude the version field from summary
+        return {key: len(value) for key, value in self.data.items() if key != "version"}
