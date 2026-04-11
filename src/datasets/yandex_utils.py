@@ -1,11 +1,38 @@
 import json
 import os
+import time
+import tempfile
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 import yadisk
-import tempfile
+
+
+def _upload_with_retry(client, local_path, remote_path, max_wait_seconds=300):
+    """
+    Upload a file with retry on ResourceIsLockedError.
+    Uses exponential backoff: 1, 2, 4, 8, 16, 32 seconds (max 32).
+    Total wait up to max_wait_seconds.
+    """
+    start_time = time.time()
+    delay = 1
+    while True:
+        try:
+            client.upload(str(local_path), remote_path, overwrite=True)
+            return  # success
+        except yadisk.exceptions.ResourceIsLockedError:
+            elapsed = time.time() - start_time
+            if elapsed + delay > max_wait_seconds:
+                raise  # timeout exceeded, re-raise the last error
+            print(f"Resource locked, retrying in {delay}s... (total wait {elapsed:.1f}s)")
+            time.sleep(delay)
+            delay = min(delay * 2, 32)  # exponential backoff, cap at 32s
+        except Exception:
+            # Other errors are not retried
+            raise
+
+
 class CsvChunkDownloader:
     def __init__(self, file_csv, columns: list[str], chunk_rows: Optional[int] = 100, download_from_disk=False):
         self.file_csv = Path(file_csv)
@@ -21,7 +48,6 @@ class CsvChunkDownloader:
         return self
 
     def update_csv(self, row: pd.Series):
-        """Add a row to the buffer and upload if chunk size reached."""
         self.buffer.append(row.to_dict())
         if self.chunk_rows is not None and len(self.buffer) >= self.chunk_rows:
             self.upload_chunk()
@@ -30,7 +56,6 @@ class CsvChunkDownloader:
         if not self.buffer:
             return
         remote_path = f"/{self.file_csv.as_posix()}"
-        # Skip downloading existing CSV – just append locally and upload
         df_chunk = pd.DataFrame(self.buffer, columns=self.columns)
         df_chunk.to_csv(self.file_csv, mode="a", header=not self.file_csv.exists(), index=False)
 
@@ -39,8 +64,9 @@ class CsvChunkDownloader:
                 remote_dir = Path(remote_path).parent
                 if remote_dir.as_posix() != "/" and not self.client.exists(remote_dir.as_posix()):
                     self.client.makedirs(remote_dir.as_posix())
-                self.client.upload(str(self.file_csv), remote_path, overwrite=True)
+                _upload_with_retry(self.client, self.file_csv, remote_path)
         self.buffer.clear()
+
     def get_csv(self, default_columns):
         if not self.file_csv.exists():
             return pd.DataFrame(columns=default_columns)
@@ -49,6 +75,8 @@ class CsvChunkDownloader:
     def __exit__(self, exc_type, exc_value, traceback):
         self.upload_chunk()
         return False
+
+
 class FILEDownloader:
     def __init__(self, file_path: str | Path, download_from_disk: bool = True):
         self.file_path = Path(file_path)
@@ -77,7 +105,7 @@ class FILEDownloader:
             remote_dir = Path(remote_path).parent
             if remote_dir.as_posix() != "/" and not self.client.exists(remote_dir.as_posix()):
                 self.client.makedirs(remote_dir.as_posix())
-            self.client.upload(str(self.file_path), remote_path, overwrite=True)
+            _upload_with_retry(self.client, self.file_path, remote_path)
 
     def exists(self) -> bool:
         if self.file_path.exists():
@@ -94,12 +122,8 @@ class FILEDownloader:
         return False
 
 
-
 class FILETracker:
     def __init__(self, tracker_path: str | Path, download_from_disk: bool = True, auto_sync_interval: int = 0):
-        """
-        auto_sync_interval: if > 0, sync every N modifications (e.g., 50) to reduce uploads.
-        """
         self.tracker_path = Path(tracker_path)
         self.download_from_disk = download_from_disk
         self.yandex_token = os.getenv("YANDEX_TOKEN")
@@ -145,7 +169,7 @@ class FILETracker:
             with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as tmp:
                 json.dump(self.data, tmp, indent=2)
                 tmp_path = Path(tmp.name)
-            self.client.upload(str(tmp_path), remote_path, overwrite=True)
+            _upload_with_retry(self.client, tmp_path, remote_path)
             tmp_path.unlink()
         self._dirty = False
         self._mod_count = 0
@@ -188,7 +212,6 @@ class FILETracker:
         self._maybe_auto_sync()
 
     def get_status(self, video_id: str) -> str:
-        # Use cached data (no download per call)
         if video_id in self.data["completed"]:
             return "completed"
         if video_id in self.data["failed"]:
@@ -203,9 +226,7 @@ class FILETracker:
         return {key: len(value) for key, value in self.data.items() if key != "version"}
 
     def refresh(self):
-        """Manually download latest remote state (e.g., when multiple processes run)."""
         self._download()
 
     def flush(self):
-        """Manually upload pending changes."""
         self._upload(force=True)
