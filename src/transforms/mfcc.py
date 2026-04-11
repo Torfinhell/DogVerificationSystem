@@ -34,4 +34,4 @@ class MfccExtractor(nn.Module):
         audio_np = audio.cpu().numpy()
         mfcc_np = self.mfcc_extractor(y=audio_np)   
         mfcc_tensor = torch.from_numpy(mfcc_np).float()
-        return mfcc_tensor
+        return mfcc_tensor.squeeze()

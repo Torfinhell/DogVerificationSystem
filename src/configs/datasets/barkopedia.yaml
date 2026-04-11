@@ -2,22 +2,30 @@ train:
   _target_: src.datasets.BarkopediaDataset
   part: "train"
   train_split: 0.7
-  val_split: 0.15
-  test_split: 0.15
+  hub_workers: 1
+  data_dir: null
+  random_seed: ${trainer.seed}              
   instance_transforms: ${transforms.instance_transforms.train}
 
-val:
+backend_test_dataset:
   _target_: src.datasets.BarkopediaDataset
-  part: "val"
+  part: "val"                                
+  data_dir: null
   train_split: 0.7
-  val_split: 0.15
-  test_split: 0.15
+  hub_workers: 1
+  random_seed: ${trainer.seed}
   instance_transforms: ${transforms.instance_transforms.inference}
 
-test:
-  _target_: src.datasets.BarkopediaDataset
+fit_backend:
+  _target_: src.datasets.TestBackend
+  dataset: ${datasets.backend_test_dataset}
+  part: "fit"
+  fit_split: 0.7                             
+  seed: ${trainer.seed}
+
+test_backend:
+  _target_: src.datasets.TestBackend
+  dataset: ${datasets.backend_test_dataset}
   part: "test"
-  train_split: 0.7
-  val_split: 0.15
-  test_split: 0.15
-  instance_transforms: ${transforms.instance_transforms.inference}
+  fit_split: 0.7                              
+  seed: ${trainer.seed}

@@ -1,24 +1,4 @@
-train:
-
-
-  - _target_: src.metrics.EERMetric
-    device: ${trainer.device}
-    name: "TRAIN_EER"
-
-val:
-  - _target_: src.metrics.EERMetric
-    device: ${trainer.device}
-    name: "EER"
-
-  - _target_: src.metrics.DCFMetric
-    device: ${trainer.device}
-    p_target: 0.01
-    c_miss: 1.0
-    c_fa: 1.0
-    name: "minDCF"
-
-test:
-
+classification_metrics:
   - _target_: src.metrics.ClassificationMetric
     classification_metric:
       _target_: torchmetrics.Accuracy
@@ -26,7 +6,6 @@ test:
       num_classes: ${num_classes}
     device: ${trainer.device}
     name: "Accuracy"
-
 
   - _target_: src.metrics.ClassificationMetric
     classification_metric:
@@ -64,6 +43,21 @@ test:
       average: micro
     device: ${trainer.device}
     name: "Precision_micro"
-
-# Confusion matrix is now computed directly in _evaluation_epoch
-# Results include: cm_accuracy, cm_precision_macro/micro, cm_recall_macro/micro, cm_f1_macro/micro
+#TODO calculate classification metrics  
+train:
+  ${metrics.classification_metrics}
+val:
+  - _target_: src.metrics.EERMetric
+    device: ${trainer.device}
+    name: "EER"
+  - _target_: src.metrics.DCFMetric
+    device: ${trainer.device}
+    p_target: 0.01
+    c_miss: 1.0
+    c_fa: 1.0
+    name: "minDCF"
+#TODO also fix parametrs for metrics(check them at least)
+test_backend:
+  ${metrics.classification_metrics}
+  
+#TODO what about confusion matrix

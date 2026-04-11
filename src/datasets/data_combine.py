@@ -1,125 +1,83 @@
-from __future__ import annotations
-
 import json
+import random
 from pathlib import Path
-from typing import Sequence
+from typing import List, Tuple, Any, Dict
 from torch.utils.data import Dataset
-import torch
-from torch.utils.data import ConcatDataset
-
 from src.utils.io_utils import ROOT_PATH
-
-
-class DatasetCombine(ConcatDataset):
+class DatasetCombine(Dataset):
+    NAME = "DatasetCombine"
     def __init__(
         self,
-        datasets: Sequence[Dataset],
-        num_local_classes: Sequence[int] | None = None,
-        dataset_names: Sequence[str] | None = None,
-        map_json_path: Path | str | None = None,
+        datasets: List[Dataset],
+        seed: int = 42,
+        cache_dir: Path = None,
     ):
-        """
-        Args:
-            datasets: Source datasets; each ``__getitem__`` returns a dict with
-                ``"label"`` (local class index).
-            num_local_classes: Number of distinct local classes per dataset,
-                in the same order as ``datasets``. If None, gets from ds.num_classes.
-            dataset_names: Unique name per dataset; used as JSON keys for offsets
-                and for ``local_to_global`` (same order as ``datasets``).
-            map_json_path: Where to write the mapping. Default:
-                ``ROOT_PATH / "data" / "datasets" / "concat_label_map.json"``.
-        """
-        super().__init__(datasets)
+        self.datasets = datasets
+        self.seed = seed
 
-        if num_local_classes is None:
-            self._num_local = [ds.num_classes for ds in datasets]
-        else:
-            self._num_local = [int(n) for n in num_local_classes]
+        if cache_dir is None:
+            cache_dir = ROOT_PATH / "data" / "datasets" / "combined_cache"
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.dataset_names = [getattr(ds, "NAME", f"ds_{i}") for i, ds in enumerate(datasets)]
+        self._combined_indices, self.label_mapping = self._load_or_build()
+        self.num_classes = len(self.label_mapping)
 
-        if dataset_names is None:
-            self._dataset_names = [f"dataset_{i}" for i in range(len(datasets))]
-        else:
-            self._dataset_names = list(dataset_names)
-
-        offsets: list[int] = []
-        o = 0
-        for n in self._num_local:
-            if n <= 0:
-                raise ValueError(f"num_local_classes must be positive, got {n}")
-            offsets.append(o)
-            o += n
-        self._offsets = offsets
-        self._num_classes = o
-
-        if map_json_path is None:
-            map_json_path = ROOT_PATH / "data" / "datasets" / "concat_label_map.json"
-        self._map_path = Path(map_json_path)
-        self._write_map_json()
-
-    @property
-    def num_classes(self) -> int:
-        return self._num_classes
-
-    def _write_map_json(self) -> None:
-        if self._map_path.exists():
-            return
-        name_to_offset: dict[str, int] = {}
-        local_to_global: dict[str, dict[str, int]] = {}
-        for i, off in enumerate(self._offsets):
-            name = self._dataset_names[i]
-            name_to_offset[name] = off
-            local_to_global[name] = {
-                str(local): off + local for local in range(self._num_local[i])
-            }
-
-        payload = {
-            "num_classes": self._num_classes,
-            **name_to_offset,
-            "local_to_global": local_to_global,
+    def _load_or_build(self) -> Tuple[List[Tuple[int, int]], Dict[Tuple[int, int], int]]:
+        """Return (combined_indices, label_mapping)."""
+        key_data = {
+            "dataset_names": self.dataset_names,
+            "dataset_lengths": [len(ds) for ds in self.datasets],
+            "seed": self.seed,
         }
-        self._map_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._map_path.open("w") as f:
-            json.dump(payload, f, indent=2)
+        cache_file = self.cache_dir / f"combined_{hash(str(key_data))}.json"
 
-    def __getitem__(self, index: int) -> dict:
-        dataset_idx = 0
-        local_idx = index
-        for i, ds in enumerate(self.datasets):
-            if local_idx < len(ds):
-                dataset_idx = i
-                break
-            local_idx -= len(ds)
-        
-        sample = self.datasets[dataset_idx][local_idx]
-        if not isinstance(sample, dict):
-            raise TypeError(
-                f"Dataset {self._dataset_names[dataset_idx]!r} ({dataset_idx}) must return a dict "
-                f"from __getitem__, got {type(sample)}"
-            )
-        
-        # Extract local label from sample
-        v = sample["label"]
-        local_label = int(v.item()) if isinstance(v, torch.Tensor) else int(v)
-        
-        nloc = self._num_local[dataset_idx]
-        if not (0 <= local_label < nloc):
-            raise ValueError(
-                f"Dataset {self._dataset_names[dataset_idx]!r} ({dataset_idx}) returned local label "
-                f"{local_label}, expected in [0, {nloc})"
-            )
-        
-        # Compute and set global label
-        global_label = self._offsets[dataset_idx] + local_label
-        out = dict(sample)
-        out["label"] = global_label
-        return out
+        if cache_file.exists():
+            with open(cache_file, 'r') as f:
+                data = json.load(f)
+            mapping = {tuple(map(int, k.split(','))): v for k, v in data["label_mapping"].items()}
+            indices = [tuple(idx) for idx in data["indices"]]
+            print(f"Loaded combined data from {cache_file}")
+            return indices, mapping
+        indices = []
+        unique_labels = set()
+        label_mapping = {}
+        for ds_idx, ds in enumerate(self.datasets):
+            ds_index = ds.load_index()
+            for item in ds_index:
+                if "label" in item:
+                    local_label = item["label"]
+                    if hasattr(local_label, 'item'):
+                        local_label = local_label.item()
+                    unique_labels.add((ds_idx, int(local_label)))
+        for i, (ds_idx, local_label) in enumerate(sorted(unique_labels)): 
+            label_mapping[(ds_idx, local_label)] = i
+        for ds_idx, ds in enumerate(self.datasets):
+            for sample_idx in range(len(ds)):
+                indices.append((ds_idx, sample_idx))
 
+        rng = random.Random(self.seed)
+        rng.shuffle(indices)
+        cache_data = {
+            "indices": indices,
+            "label_mapping": {f"{k[0]},{k[1]}": v for k, v in label_mapping.items()},
+        }
+        with open(cache_file, 'w') as f:
+            json.dump(cache_data, f, indent=2)
+        print(f"Saved combined data to {cache_file}")
 
-def read_num_classes_from_concat_map(map_json_path: Path | str | None = None) -> int:
-    """Read ``num_classes`` from a ``concat_label_map.json`` written by :class:`DatasetCombine`."""
-    if map_json_path is None:
-        map_json_path = ROOT_PATH / "data" / "datasets" / "concat_label_map.json"
-    path = Path(map_json_path)
-    with path.open() as f:
-        data = json.load(f)
-    return int(data["num_classes"])
+        return indices, label_mapping
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        ds_idx, local_idx = self._combined_indices[idx]
+        sample = self.datasets[ds_idx][local_idx]
+        if "label" in sample:
+            local_label = sample["label"]
+            key = (ds_idx, int(local_label))
+            if key not in self.label_mapping:
+                raise KeyError(f"Label {local_label} from dataset {ds_idx} not found in mapping")
+            sample["label"] = self.label_mapping[key]
+        return sample
+
+    def __len__(self) -> int:
+        return len(self._combined_indices)

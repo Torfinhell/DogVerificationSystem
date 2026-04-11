@@ -181,7 +181,7 @@ class WandBWriter:
         """
         if self.wandb is None:
             return
-        audio = audio.detach().cpu().numpy().T
+        audio = audio.detach().cpu().numpy().squeeze()
         self.wandb.log(
             {
                 self._object_name(audio_name): self.wandb.Audio(
