@@ -37,8 +37,8 @@ class CsvChunkDownloader:
         if self.yandex_token is not None:
             with self.client:
                 remote_dir = Path(remote_path).parent
-                if remote_dir.as_posix() != "/":
-                    self.client.makedirs(remote_dir.as_posix(), exist_ok=True)
+                if remote_dir.as_posix() != "/" and not self.client.exists(remote_dir.as_posix()):
+                    self.client.makedirs(remote_dir.as_posix())
                 self.client.upload(str(self.file_csv), remote_path, overwrite=True)
         self.buffer.clear()
 
@@ -78,8 +78,8 @@ class FILEDownloader:
         remote_path = f"/{self.file_path.as_posix()}"
         with self.client:
             remote_dir = Path(remote_path).parent
-            if remote_dir.as_posix() != "/":
-                self.client.makedirs(remote_dir.as_posix(), exist_ok=True)
+            if remote_dir.as_posix() != "/" and not self.client.exists(remote_dir.as_posix()):
+                self.client.makedirs(remote_dir.as_posix())
             self.client.upload(str(self.file_path), remote_path, overwrite=True)
 
     def exists(self) -> bool:
@@ -132,11 +132,10 @@ class FILETracker:
             remote_path = f"/{self.tracker_path.as_posix()}"
             with self.client:
                 remote_dir = Path(remote_path).parent
-                if remote_dir.as_posix() != "/":
-                    self.client.makedirs(remote_dir.as_posix(), exist_ok=True)
+                if remote_dir.as_posix() != "/" and not self.client.exists(remote_dir.as_posix()):
+                    self.client.makedirs(remote_dir.as_posix())
                 self.client.upload(str(self.tracker_path), remote_path, overwrite=True)
 
-    # The following methods are unchanged from the original
     def mark_started(self, video_id: str, info: dict | None = None) -> None:
         self.data["in_progress"][video_id] = {"status": "in_progress", "info": info or {}}
 
