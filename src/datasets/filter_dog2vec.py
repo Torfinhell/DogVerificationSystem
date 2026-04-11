@@ -10,6 +10,7 @@ from tqdm import tqdm
 import requests
 import argparse
 import os
+import time
 BREED_JSONS = [
         "chihuahua.json",
         "german_shepherd.json",
@@ -133,6 +134,7 @@ def download_info_youtube():
                     breed_counts[breed] = breed_counts.get(breed, 0) + 1
                     tracker.mark_done(video_id, {"breed": breed, "context": entry["context"]})
                     processed_ids.add(video_id)
+                    time.sleep(1)  
     category_info = {
         "num_breeds": len(breed_counts),
         "breed_video_counts": breed_counts,
