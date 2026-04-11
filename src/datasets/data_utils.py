@@ -377,9 +377,9 @@ def _download_video(video_id: str, out_path: Path):
 
 def youtube_download(
     entry: Dict,
-    audio_root: Path = Path("./data/dog2vec_dataset/audio"),
-    frames_root: Path = Path("./data/dog2vec_dataset/frames"),
-    bad_videos_path: Path = Path("./data/dog2vec_dataset/bad_videos.json"),
+    audio_root: Path = Path("./data/datasets/dog2vec_dataset/audio"),
+    frames_root: Path = Path("./data/datasets/dog2vec_dataset/frames"),
+    bad_videos_path: Path = Path("./data/datasets/dog2vec_dataset/bad_videos.json"),
     audio_only: bool = True,
 ) -> List[Dict]:
     video_id = entry["video_id"]
