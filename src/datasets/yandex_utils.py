@@ -5,8 +5,7 @@ from typing import Optional
 
 import pandas as pd
 import yadisk
-
-
+import tempfile
 class CsvChunkDownloader:
     def __init__(self, file_csv, columns: list[str], chunk_rows: Optional[int] = 100, download_from_disk=False):
         self.file_csv = Path(file_csv)
@@ -31,12 +30,7 @@ class CsvChunkDownloader:
         if not self.buffer:
             return
         remote_path = f"/{self.file_csv.as_posix()}"
-        if self.download_from_disk and self.yandex_token:
-            with self.client:
-                self.file_csv.parent.mkdir(parents=True, exist_ok=True)
-                if self.client.exists(remote_path):
-                    print(f"Downloading existing CSV from Yandex.Disk: {remote_path}")
-                    self.client.download(remote_path, str(self.file_csv))
+        # Skip downloading existing CSV – just append locally and upload
         df_chunk = pd.DataFrame(self.buffer, columns=self.columns)
         df_chunk.to_csv(self.file_csv, mode="a", header=not self.file_csv.exists(), index=False)
 
@@ -47,7 +41,6 @@ class CsvChunkDownloader:
                     self.client.makedirs(remote_dir.as_posix())
                 self.client.upload(str(self.file_csv), remote_path, overwrite=True)
         self.buffer.clear()
-
     def get_csv(self, default_columns):
         if not self.file_csv.exists():
             return pd.DataFrame(columns=default_columns)
@@ -101,20 +94,18 @@ class FILEDownloader:
         return False
 
 
-import json
-import os
-import tempfile
-from pathlib import Path
-from typing import Optional
-
-import yadisk
-
 
 class FILETracker:
-    def __init__(self, tracker_path: str | Path, download_from_disk: bool = True):
+    def __init__(self, tracker_path: str | Path, download_from_disk: bool = True, auto_sync_interval: int = 0):
+        """
+        auto_sync_interval: if > 0, sync every N modifications (e.g., 50) to reduce uploads.
+        """
         self.tracker_path = Path(tracker_path)
         self.download_from_disk = download_from_disk
         self.yandex_token = os.getenv("YANDEX_TOKEN")
+        self.auto_sync_interval = auto_sync_interval
+        self._dirty = False
+        self._mod_count = 0
         self.data = {
             "in_progress": {},
             "completed": {},
@@ -126,78 +117,78 @@ class FILETracker:
             self.client = yadisk.Client(token=self.yandex_token)
 
     def _download(self):
-        """Download remote tracker and replace local data if remote version is newer."""
         if self.yandex_token is None or not self.download_from_disk:
             return
         remote_path = f"/{self.tracker_path.as_posix()}"
         with self.client:
             if self.client.exists(remote_path):
-                # Download to a temporary file
                 with tempfile.NamedTemporaryFile(delete=False) as tmp:
                     tmp_path = Path(tmp.name)
                 self.client.download(remote_path, str(tmp_path))
-                with open(tmp_path, 'r') as f:
+                with open(tmp_path) as f:
                     remote_data = json.load(f)
                 tmp_path.unlink()
-                # Only replace if remote has a newer version
                 if remote_data.get("version", 0) > self.data.get("version", 0):
                     self.data = remote_data
 
-    def _upload(self):
-        """Upload current data to remote, incrementing version."""
+    def _upload(self, force=False):
         if self.yandex_token is None:
+            return
+        if not self._dirty and not force:
             return
         self.data["version"] = self.data.get("version", 0) + 1
         remote_path = f"/{self.tracker_path.as_posix()}"
         with self.client:
-            # Ensure remote directory exists
             remote_dir = Path(remote_path).parent
             if remote_dir.as_posix() != "/" and not self.client.exists(remote_dir.as_posix()):
                 self.client.makedirs(remote_dir.as_posix())
-            # Write to a temporary file then upload
             with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as tmp:
                 json.dump(self.data, tmp, indent=2)
                 tmp_path = Path(tmp.name)
             self.client.upload(str(tmp_path), remote_path, overwrite=True)
             tmp_path.unlink()
+        self._dirty = False
+        self._mod_count = 0
 
     def __enter__(self):
         self._download()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self._upload()
+        self._upload(force=True)
         return False
 
-    def save(self):
-        """Explicitly upload current state."""
-        self._upload()
+    def _maybe_auto_sync(self):
+        if self.auto_sync_interval > 0:
+            self._mod_count += 1
+            if self._mod_count >= self.auto_sync_interval:
+                self._upload()
 
     def mark_started(self, video_id: str, info: dict | None = None) -> None:
-        self._download()
         self.data["in_progress"][video_id] = {"status": "in_progress", "info": info or {}}
-        self._upload()
+        self._dirty = True
+        self._maybe_auto_sync()
 
     def mark_done(self, video_id: str, info: dict | None = None) -> None:
-        self._download()
         self.data["in_progress"].pop(video_id, None)
         self.data["completed"][video_id] = {"status": "completed", "info": info or {}}
-        self._upload()
+        self._dirty = True
+        self._maybe_auto_sync()
 
     def mark_failed(self, video_id: str, reason: str | None = None, info: dict | None = None) -> None:
-        self._download()
         self.data["in_progress"].pop(video_id, None)
         self.data["failed"][video_id] = {"status": "failed", "reason": reason, "info": info or {}}
-        self._upload()
+        self._dirty = True
+        self._maybe_auto_sync()
 
     def mark_skipped(self, video_id: str, reason: str | None = None, info: dict | None = None) -> None:
-        self._download()
         self.data["in_progress"].pop(video_id, None)
         self.data["skipped"][video_id] = {"status": "skipped", "reason": reason, "info": info or {}}
-        self._upload()
+        self._dirty = True
+        self._maybe_auto_sync()
 
     def get_status(self, video_id: str) -> str:
-        self._download()
+        # Use cached data (no download per call)
         if video_id in self.data["completed"]:
             return "completed"
         if video_id in self.data["failed"]:
@@ -209,6 +200,12 @@ class FILETracker:
         return "unknown"
 
     def summary(self) -> dict:
-        self._download()
-        # Exclude the version field from summary
         return {key: len(value) for key, value in self.data.items() if key != "version"}
+
+    def refresh(self):
+        """Manually download latest remote state (e.g., when multiple processes run)."""
+        self._download()
+
+    def flush(self):
+        """Manually upload pending changes."""
+        self._upload(force=True)
