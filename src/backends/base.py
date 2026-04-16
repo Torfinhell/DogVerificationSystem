@@ -16,11 +16,6 @@ class BaseBackend(ABC, nn.Module):
         super().__init__()
 
     @abstractmethod
-    def forward(self, embeddings1, embeddings2):
-        """Forward pass for the backend."""
-        pass
-
-    @abstractmethod
     def fit(self, embeddings, labels):
         """Fit the backend on training embeddings."""
         pass
@@ -29,3 +24,5 @@ class BaseBackend(ABC, nn.Module):
     def predict(self, embeddings):
         """Predict class labels for embeddings."""
         pass
+    def reset(self):
+        "resets all interanl states for new fit"

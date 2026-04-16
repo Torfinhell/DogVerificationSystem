@@ -1,41 +1,334 @@
-import io
-import matplotlib.pyplot as plt
-import PIL
-from torchvision.transforms import ToTensor
-plt.switch_backend("agg")  
+"""Figure helpers for logging (W&B, etc.): PCA, sphere plots, mel spectrograms, confusion matrices."""
 
-def plot_images(imgs, config):
+from __future__ import annotations
+
+import io
+from typing import Any
+
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+from PIL import Image
+from torchvision.transforms import ToTensor
+
+
+plt.switch_backend("agg")  # avoid RuntimeError: main thread is not in main loop
+
+
+def feature_plot_params_from_config(config: Any) -> dict[str, Any]:
     """
-    Combine several images into one figure.
+    Return parameters for logging either a mel spectrogram or MFCCs 
+
+    Returns:
+        dict with ``kind`` ``\"mel\"`` or ``\"mfcc\"`` plus hop / rate / band counts.
+    """
+    spectral_cfg = config.transforms.instance_transforms.train.get_spectral_feat
+    target = str(spectral_cfg.get("_target_", "")).lower()
+    if "mfcc" in target:
+        sr = float(spectral_cfg.get("sample_rate", 16000))
+        hop_sec = float(spectral_cfg.get("hop_length_sec", 0.01))
+        return {
+            "kind": "mfcc",
+            "hop_length": int(sr * hop_sec),
+            "sample_rate": sr,
+            "n_mfcc": int(spectral_cfg.get("n_mfcc", 24)),
+        }
+    return {
+        "kind": "mel",
+        "hop_length": int(spectral_cfg.get("hop_length", 160)),
+        "n_mels": int(spectral_cfg.get("n_mels", 128)),
+        "sample_rate": float(spectral_cfg.get("sample_rate", 16000)),
+    }
+
+
+def plot_images(
+    imgs: torch.Tensor,
+    names: list[str],
+    figsize: tuple[float, float] = (12, 4),
+) -> np.ndarray:
+    """
+    Combine several images into one figure (side by side).
 
     Args:
-        imgs (Tensor): array of images (B X C x H x W).
-        config (DictConfig): hydra experiment config.
+        imgs: (B, C, H, W).
+        names: subplot titles; length must match ``B``.
+        figsize: matplotlib figure size.
+
     Returns:
-        image (Tensor): a single figure with imgs plotted side-to-side.
+        (H, W, 3) float array in [0, 1] for ``wandb.Image``.
     """
-    # name of each img in the array
-    names = config.writer.logger.names
-    # figure size
-    figsize = config.writer.logger.figsize
-    fig, axes = plt.subplots(1, len(names), figsize=figsize)
-    for i in range(len(names)):
-        # channels must be in the last dim
-        img = imgs[i].permute(1, 2, 0)
-        axes[i].imshow(img)
+    imgs = imgs.detach().cpu().float()
+    b = imgs.shape[0]
+    if b != len(names):
+        raise ValueError(f"len(names) ({len(names)}) must match batch dim ({b})")
+    fig, axes = plt.subplots(1, b, figsize=figsize)
+    if b == 1:
+        axes = [axes]
+    for i in range(b):
+        img = imgs[i].permute(1, 2, 0).numpy()
+        if img.shape[-1] == 1:
+            img = np.repeat(img, 3, axis=-1)
+        axes[i].imshow(np.clip(img, 0, 1))
         axes[i].set_title(names[i])
-        axes[i].axis("off")  # we do not need axis
-    # To create a tensor from matplotlib,
-    # we need a buffer to save the figure
+        axes[i].axis("off")
     buf = io.BytesIO()
     fig.tight_layout()
     plt.savefig(buf, format="png", bbox_inches="tight")
     buf.seek(0)
-    # convert buffer to Tensor
-    image = ToTensor()(PIL.Image.open(buf))
+    out = ToTensor()(Image.open(buf)).permute(1, 2, 0).numpy()
+    plt.close(fig)
+    return out
 
-    plt.close()
 
+def plot_mfcc_coeffs(
+    mfcc: torch.Tensor,
+    params: dict[str, Any] | None = None,
+    title: str | None = None,
+    figsize: tuple[float, float] = (26, 7),
+) -> np.ndarray:
+    """
+    Plot MFCC trajectories (linear coefficients, not log mel power) for W&B.
+
+    Args:
+        mfcc: (n_mfcc, time) or (C, n_mfcc, time); multi-channel is averaged.
+        params: ``hop_length``, ``sample_rate``, ``n_mfcc`` from
+            ``feature_plot_params_from_config`` (``kind`` ``\"mfcc\"``).
+        title: optional figure title.
+
+    Returns:
+        (H, W, 3) float array in [0, 1].
+    """
+    spec = mfcc.detach().float().cpu().numpy()
+    if spec.ndim == 3:
+        spec = spec.mean(axis=0)
+    ms = params or {}
+    hop_length = int(ms.get("hop_length", 160))
+    sample_rate = float(ms.get("sample_rate", 16000))
+    n_cfg = int(ms.get("n_mfcc", spec.shape[0]))
+    n = min(n_cfg, spec.shape[0])
+    spec = spec[:n, :]
+    t_grid = np.arange(0, spec.shape[1]) * hop_length / sample_rate
+    f_grid = np.arange(spec.shape[0])
+    tt, ff = np.meshgrid(t_grid, f_grid)
+    f, ax = plt.subplots(figsize=figsize)
+    im = ax.pcolormesh(tt, ff, spec, cmap="coolwarm", shading="auto")
+    ax.set_xlabel("Time, sec", size=20)
+    ax.set_ylabel("MFCC coefficient index", size=20)
+    if title:
+        ax.set_title(title)
+    plt.colorbar(im, ax=ax)
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight")
+    buf.seek(0)
+    image = ToTensor()(Image.open(buf)).permute(1, 2, 0).numpy()
+    plt.close(f)
     return image
 
 
+def plot_spectrogram(
+    spectrogram: torch.Tensor,
+    mel_spec: dict[str, int | float] | None = None,
+    title: str | None = None,
+    figsize: tuple[float, float] = (26, 7),
+) -> np.ndarray:
+    """
+    Plot a mel-scale spectrogram (log power in dB) and return an RGB array for W&B.
+
+    Args:
+        spectrogram: (n_mels, time) or (C, n_mels, time); multi-channel is averaged.
+        mel_spec: optional ``hop_length``, ``n_mels``, ``sample_rate`` (torchaudio MelSpectrogram).
+        title: optional axis title.
+
+    Returns:
+        (H, W, 3) float array in [0, 1].
+    """
+    spec = spectrogram.detach().float().cpu().numpy()
+    if spec.ndim == 3:
+        spec = spec.mean(axis=0)
+    ms = mel_spec or {}
+    hop_length = int(ms.get("hop_length", 160))
+    sample_rate = float(ms.get("sample_rate", 16000))
+    n_mels_cfg = int(ms.get("n_mels", spec.shape[0]))
+    n_mels = min(n_mels_cfg, spec.shape[0])
+    spec = spec[:n_mels, :]
+    t_grid = np.arange(0, spec.shape[1]) * hop_length / sample_rate
+    f_grid = np.arange(spec.shape[0])
+    tt, ff = np.meshgrid(t_grid, f_grid)
+    f, ax = plt.subplots(figsize=figsize)
+    im = ax.pcolormesh(
+        tt,
+        ff,
+        20 * np.log10(np.maximum(spec, 1e-8)),
+        cmap="gist_heat",
+        shading="auto",
+    )
+    ax.set_xlabel("Time, sec", size=20)
+    ax.set_ylabel("Frequency, Mel bin", size=20)
+    if title:
+        ax.set_title(title)
+    plt.colorbar(im, ax=ax)
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight")
+    buf.seek(0)
+    image = ToTensor()(Image.open(buf)).permute(1, 2, 0).numpy()
+    plt.close(f)
+    return image
+def embedding_to_3d(emb: torch.Tensor) -> torch.Tensor:
+    """Project (N, D) embeddings to (N, 3) via PCA (SVD on centered data)."""
+    x = emb.float()
+    if x.shape[0] < 2:
+        z = torch.zeros(x.shape[0], 3, device=x.device, dtype=x.dtype)
+        z[:, : min(3, x.shape[1])] = x[:, : min(3, x.shape[1])]
+        return z
+    x = x - x.mean(dim=0, keepdim=True)
+    _, _, vh = torch.linalg.svd(x, full_matrices=False)
+    k = min(3, vh.shape[0])
+    out = x @ vh[:k].T
+    if out.shape[1] < 3:
+        pad = torch.zeros(out.shape[0], 3 - out.shape[1], device=out.device, dtype=out.dtype)
+        out = torch.cat([out, pad], dim=1)
+    return out
+
+def sphere_plot_tensor(
+    embeddings: np.ndarray,
+    labels: np.ndarray,
+    figsize: tuple[float, float] = (10, 10),
+    dpi: int = 100,
+    title: str | None = None,
+) -> torch.Tensor:
+    """
+    Create a 3D sphere plot of embeddings and return as a torch tensor.
+
+    Expects ``embeddings`` as (N, 3) points on (or near) the unit sphere; rows are
+    L2-normalized internally before plotting.
+
+    Args:
+        embeddings: (N, 3) array of 3D coordinates.
+        labels: (N,) array of labels for coloring.
+        figsize: tuple (width, height) in inches.
+        dpi: resolution.
+        title: optional figure title.
+
+    Returns:
+        torch.Tensor of shape (3, H, W) with RGB values in [0, 1].
+    """
+    emb = np.asarray(embedding_to_3d(torch.tensor(embeddings)), dtype=np.float64)
+    lab = np.asarray(labels)
+    if emb.ndim != 2 or emb.shape[1] != 3:
+        raise ValueError(f"embeddings must be (N, 3), got {emb.shape}")
+    if lab.shape[0] != emb.shape[0]:
+        raise ValueError("labels length must match embeddings")
+
+    norms = np.linalg.norm(emb, axis=1, keepdims=True)
+    emb = emb / np.clip(norms, 1e-12, None)
+
+    fig = plt.figure(figsize=figsize, dpi=dpi)
+    ax = fig.add_subplot(111, projection="3d")
+
+    r = 1.0
+    phi, theta = np.mgrid[0.0 : np.pi : 100j, 0.0 : 2.0 * np.pi : 100j]
+    x = r * np.sin(phi) * np.cos(theta)
+    y = r * np.sin(phi) * np.sin(theta)
+    z = r * np.cos(phi)
+    ax.plot_surface(
+        x, y, z, rstride=1, cstride=1, color="w", alpha=0.3, linewidth=0
+    )
+
+    ax.scatter(
+        emb[:, 0],
+        emb[:, 1],
+        emb[:, 2],
+        c=lab,
+        s=20,
+        marker=".",
+    )
+
+    ax.set_xlim([-1, 1])
+    ax.set_ylim([-1, 1])
+    ax.set_zlim([-1, 1])
+    if title:
+        ax.set_title(title)
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight")
+    buf.seek(0)
+
+    image = ToTensor()(Image.open(buf))
+    plt.close(fig)
+    return image
+
+
+
+def confusion_matrix_figure(
+    cm,
+    title: str = "Confusion Matrix",
+    figsize: tuple[float, float] = (8, 7),
+    class_names: list = None
+):
+    """
+    Builds a professional heatmap from a raw matrix or a ConfusionMatrixDisplay object.
+    Returns an RGB array suitable for wandb.Image.
+    """
+    cm = np.array(cm)
+    fig, ax = plt.subplots(figsize=figsize)
+    im = ax.imshow(cm, interpolation="nearest", cmap="Blues")
+    ax.set_title(title, fontsize=14, pad=10)
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    ax.set_ylabel("True Label", fontsize=12)
+    ax.set_xlabel("Predicted Label", fontsize=12)
+    tick_marks = np.arange(len(class_names))
+    ax.set_xticks(tick_marks)
+    ax.set_xticklabels(class_names, rotation=45, ha="right")
+    ax.set_yticks(tick_marks)
+    ax.set_yticklabels(class_names)
+    thresh = cm.max() / 2.
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            val_format = ".2f" if cm[i, j] < 1 and cm[i, j] != 0 else "d"
+            ax.text(j, i, format(cm[i, j], val_format),
+                    ha="center", va="center",
+                    color="white" if cm[i, j] > thresh else "black",
+                    fontsize=10)
+
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120, bbox_inches="tight")
+    buf.seek(0)
+    img = plt.imread(buf)
+    plt.close(fig)
+    return img
+
+
+def similarity_matrix_figure(
+    sm,
+    title: str = "Similarity Matrix",
+    figsize: tuple[float, float] = (8, 7),
+    cmap: str = "coolwarm",
+):
+    """
+    Builds a professional heatmap from a similarity matrix without text annotations.
+    """
+    if torch.is_tensor(sm):
+        sm = sm.detach().cpu().numpy()
+    else:
+        sm = np.array(sm)
+    
+    fig, ax = plt.subplots(figsize=figsize)
+    im = ax.imshow(sm, interpolation="nearest", cmap=cmap, vmin=-1.0, vmax=1.0)
+    
+    ax.set_title(title, fontsize=14, pad=10)
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    
+    ax.set_ylabel("Index", fontsize=12)
+    ax.set_xlabel("Index", fontsize=12)
+    
+    fig.tight_layout()
+    
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120, bbox_inches="tight")
+    buf.seek(0)
+    img = plt.imread(buf)
+    plt.close(fig)
+    
+    return img

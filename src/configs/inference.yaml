@@ -12,4 +12,4 @@ device_tensors: ["data_object", "label", "audio_lengths", "spectral_feat_lengths
   device: auto # device name or "auto"
   save_path: "example" # any name here, can be a dataset name
   seed: 1
-  from_pretrained: "saved/model_best.pth" # path to the pretrained model  train_backend_on_dataset: null  # Optional: dataset name to collect embeddings for backend training (e.g., "barkopedia"). If null, backend won't be trained; if using PLDA, it must be trained on some data.
+  from_pretrained: "saved/model_best.pth" # path to the pretrained model  fit_backend_on_dataset: null  # Optional: dataset name to collect embeddings for backend training (e.g., "barkopedia"). If null, backend won't be trained; if using PLDA, it must be trained on some data.

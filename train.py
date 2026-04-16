@@ -8,10 +8,9 @@ from src.datasets.data_utils import get_dataloaders, get_metrics_and_backends
 from src.trainer import Trainer
 from src.utils.hydra_cfg import cfg_to_container
 from src.utils.init_utils import set_random_seed, setup_saving_and_logging
-from src.utils.optim_utils import instantiate_optimizer
+from src.utils.optim_utils import instantiate_optimizer_and_scheduler
 from src.utils.torch_utils import set_tf32_allowance
 import os
-
 warnings.filterwarnings("ignore", category=UserWarning)
 
 @hydra.main(version_base=None, config_path="src/configs", config_name="baseline")
@@ -31,30 +30,23 @@ def main(config):
 
     if config.trainer.get("allow_tf32") is not None:
         set_tf32_allowance(bool(config.trainer.allow_tf32))
-
-    dataloaders, batch_transforms = get_dataloaders(config, device)
-
+    dataloaders, batch_transforms, sampler_criterion = get_dataloaders(config, device)
     model = instantiate(config.model).to(device)
     if config.trainer.compile.enabled:
         model = instantiate(config.trainer.compile.call, model)
+    training_labels=dataloaders["train"].dataset.get_labels()
     logger.info(model)
-
-    loss_function = instantiate(config.loss_function).to(device)
-    metrics, backends = get_metrics_and_backends(config, dataloaders)
-    backends = [x.to(device) for x in backends]
-
-    if config.trainer.epoch_len is None:
-        config.trainer.epoch_len = len(dataloaders["train"].dataset)
-    optimizer = instantiate_optimizer(config.optimizer, model, loss_function)
-    lr_scheduler = instantiate(config.lr_scheduler, optimizer=optimizer)
-
-    epoch_len = config.trainer.get("epoch_len")
+    loss_function = instantiate(config.loss_function, labels=training_labels).to(device)
+    metrics, backends = get_metrics_and_backends(config, dataloaders, device)
+    epoch_len = len(dataloaders["train"])
+    optimizer, scheduler = instantiate_optimizer_and_scheduler(config, model, loss_function, epoch_len) #torch.compile is also called here
     trainer = Trainer(
         model=model,
         criterion=loss_function,
         metrics=metrics,
+        sampler_criterion=sampler_criterion,
         optimizer=optimizer,
-        lr_scheduler=lr_scheduler,
+        scheduler=scheduler,
         config=config,
         device=device,
         dataloaders=dataloaders,

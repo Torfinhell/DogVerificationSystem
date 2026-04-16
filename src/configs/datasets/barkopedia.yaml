@@ -7,7 +7,7 @@ train:
   random_seed: ${trainer.seed}              
   instance_transforms: ${transforms.instance_transforms.train}
 
-backend_test_dataset:
+val:
   _target_: src.datasets.BarkopediaDataset
   part: "val"                                
   data_dir: null
@@ -18,14 +18,14 @@ backend_test_dataset:
 
 fit_backend:
   _target_: src.datasets.TestBackend
-  dataset: ${datasets.backend_test_dataset}
+  dataset: ${datasets.val}
   part: "fit"
   fit_split: 0.7                             
-  seed: ${trainer.seed}
+  random_seed: ${trainer.seed}
 
 test_backend:
   _target_: src.datasets.TestBackend
-  dataset: ${datasets.backend_test_dataset}
+  dataset: ${datasets.val}
   part: "test"
   fit_split: 0.7                              
-  seed: ${trainer.seed}
+  random_seed: ${trainer.seed}

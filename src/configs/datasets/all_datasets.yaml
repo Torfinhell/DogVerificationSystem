@@ -1,38 +1,43 @@
 train:
   _target_: src.datasets.DatasetCombine
   datasets:
-    - _target_: src.datasets.BarkopediaDataset
-      part: train
-      train_split: 0.9
+    - _target_: src.datasets.Dog2VecDataset
+      part: "train"
+      train_split: 0.7
+      data_dir: null
+      max_videos_per_breed_context: 10
+      random_seed: ${trainer.seed}
       instance_transforms: ${transforms.instance_transforms.train}
 
-    - _target_: src.datasets.Dog2VecDataset
-      part: train
-      train_split: 0.8
-  dataset_names:
-    - barkopedia
-    - dog2vec
 
-
-backend_test_dataset:
+val:
   _target_: src.datasets.DatasetCombine
   datasets:
-    - _target_: src.datasets.BarkopediaDataset
-      part: "test"
+    - _target_: src.datasets.Dog2VecDataset
+      part: "val"
+      train_split: 0.7
+      data_dir: null
+      max_videos_per_breed_context: 10
+      random_seed: ${trainer.seed}
       instance_transforms: ${transforms.instance_transforms.inference}
-    # - fit_split: 0.15
+    - _target_: src.datasets.BarkopediaDataset
+      part: "val"
+      train_split: 0.0
+      hub_workers: 1
+      data_dir: null
+      random_seed: ${trainer.seed}              
+      instance_transforms: ${transforms.instance_transforms.inference}
 
 fit_backend:
   _target_: src.datasets.TestBackend
-  dataset: ${datasets.backend_test_dataset}
+  dataset: ${datasets.val}
   part: "fit"
-  fit_split: 0.15
-  seed: ${trainer.seed}
+  fit_split: 0.7                             
+  random_seed: ${trainer.seed}
 
 test_backend:
   _target_: src.datasets.TestBackend
-  dataset: ${datasets.backend_test_dataset}
+  dataset: ${datasets.val}
   part: "test"
-  fit_split: 0.15
-  seed: ${trainer.seed}
-#TODO
+  fit_split: 0.7                              
+  random_seed: ${trainer.seed}

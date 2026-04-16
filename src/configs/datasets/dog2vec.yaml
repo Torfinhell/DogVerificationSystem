@@ -2,23 +2,30 @@ train:
   _target_: src.datasets.Dog2VecDataset
   part: "train"
   train_split: 0.7
-  val_split: 0.15
-  test_split: 0.15
+  data_dir: null
+  max_videos_per_breed_context: 10
+  random_seed: ${trainer.seed}
   instance_transforms: ${transforms.instance_transforms.train}
 
 val:
   _target_: src.datasets.Dog2VecDataset
   part: "val"
+  data_dir: null
   train_split: 0.7
-  val_split: 0.15
-  test_split: 0.15
+  max_videos_per_breed_context: 10
+  random_seed: ${trainer.seed}
   instance_transforms: ${transforms.instance_transforms.inference}
 
-test:
-  _target_: src.datasets.Dog2VecDataset
+fit_backend:
+  _target_: src.datasets.TestBackend
+  dataset: ${datasets.val}
+  part: "fit"
+  fit_split: 0.7                             
+  random_seed: ${trainer.seed}
+
+test_backend:
+  _target_: src.datasets.TestBackend
+  dataset: ${datasets.val}
   part: "test"
-  train_split: 0.7
-  val_split: 0.15
-  test_split: 0.15
-  instance_transforms: ${transforms.instance_transforms.inference}
-#TODO
+  fit_split: 0.7                              
+  random_seed: ${trainer.seed}

@@ -38,11 +38,33 @@ class XVectorModel(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout)
         )
-    def forward(self, spectral_feat, **batch):
+
+
+    def _masked_mean_std(self, x, spectral_feat_lengths, eps=1e-9):
+        lengths=spectral_feat_lengths
+        if lengths is None:
+            mean = x.mean(dim=-1)
+            std = torch.sqrt((x * x).mean(dim=-1) - mean * mean + eps)
+            return mean, std
+
+        lengths = lengths.to(x.device)
+        if lengths.ndim == 1:
+            lengths = lengths.unsqueeze(1)
+        mask = torch.arange(x.size(-1), device=x.device).view(1, 1, -1) < lengths.view(-1, 1, 1)
+        mask = mask.expand(-1, x.size(1), -1).to(x.dtype)
+        masked = x * mask
+        lengths = lengths.to(x.dtype).clamp_min(1).unsqueeze(1)
+        mean = masked.sum(dim=-1) / lengths
+        mean2 = (masked * masked).sum(dim=-1) / lengths
+        std = torch.sqrt((mean2 - mean * mean).clamp_min(eps))
+        return mean, std
+
+    def forward(self, spectral_feat, spectral_feat_lengths):
         x = spectral_feat
         for layer in self.tdnns:
             x = layer(x)
-        x = torch.cat([x.mean(dim=-1), x.std(dim=-1)], dim=1)
+        mean, std = self._masked_mean_std(x, spectral_feat_lengths)
+        x = torch.cat([mean, std], dim=1)
         embedding = self.segment_layers[:-1](x)
         logits = self.segment_layers[-1](embedding)
         return {"logits": logits, "embedding": embedding}

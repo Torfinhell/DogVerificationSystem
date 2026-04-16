@@ -1,7 +1,6 @@
 import torch
 from tqdm.auto import tqdm
 
-from src.metrics.epoch_metric import EpochMetric
 from src.metrics.tracker import MetricTracker
 from src.trainer.base_trainer import BaseTrainer
 
@@ -81,7 +80,6 @@ class Inferencer(BaseTrainer):
             evaluation_metric_keys = [
                 m.name
                 for m in self.metrics.get("inference", self.metrics.get("val", []) + self.metrics.get("test", []))
-                if not isinstance(m, EpochMetric)
             ]
             self.evaluation_metrics = MetricTracker(*evaluation_metric_keys, writer=None)
         else:
@@ -144,26 +142,10 @@ class Inferencer(BaseTrainer):
             if "label" in batch:
                 self.all_labels.append(batch["label"].detach().cpu())
 
-        # Compute backend scores if backend is available and embeddings exist
-        if "embedding" in batch:
-            embeddings = batch["embedding"]
-            # Always compute cosine scores for comparison
-            import torch.nn.functional as F
-            embeddings_norm = F.normalize(embeddings, p=2, dim=1)
-            cos_scores = torch.mm(embeddings_norm, embeddings_norm.t())
-            batch["cos_scores"] = cos_scores
             
-            # Compute backend scores if backend is available
-            if self.backend is not None:
-                batch_scores = self.backend(embeddings, embeddings)
-                batch["backend_scores"] = batch_scores
-
         if metrics is not None:
             inference_metrics = self.metrics.get(part, self.metrics.get("inference", []))
             for met in inference_metrics:
-                if isinstance(met, EpochMetric):
-                    met(**batch)
-                    continue
                 met_value = met(**batch)
                 if met_value is not None:
                     if isinstance(met_value, torch.Tensor) and met_value.numel() == 1:
@@ -209,6 +191,7 @@ class Inferencer(BaseTrainer):
 
         self.is_train = False
         self.model.eval()
+        self.criterion.eval()
 
         self.evaluation_metrics.reset()
 
@@ -231,15 +214,6 @@ class Inferencer(BaseTrainer):
 
         results = self.evaluation_metrics.result()
         inference_metrics = self.metrics.get(part, self.metrics.get("inference", []))
-        for met in inference_metrics:
-            if isinstance(met, EpochMetric):
-                final = met.finalize()
-                if met.name == "confusion_matrix":
-                    # Save confusion matrix to file
-                    torch.save(final["confusion_matrix"], self.save_path / "confusion_matrix.pt")
-                else:
-                    results.update(final)
-                met.reset()
         return results
 
     def _visualize_embeddings_3d(self):

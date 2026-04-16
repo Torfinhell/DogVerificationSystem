@@ -11,7 +11,7 @@ from pydub import AudioSegment
 from pytubefix import YouTube
 from pytubefix import exceptions as pytubefix_exceptions
 from pytubefix.cli import on_progress
-
+from src.utils.io_utils import ROOT_PATH
 from .yandex_utils import FILETracker
 
 
@@ -114,13 +114,13 @@ def youtube_download(
             for seg_idx, (start, end) in enumerate(segments):
                 audio_path = video_dir / f"{seg_idx}_{start}_{end}.wav"
                 entry_out = {
-                    "path": str(audio_path.absolute()),
+                    "path": "./" + str(audio_path.relative_to(ROOT_PATH)),
                     "label": breed,
                     "audio_len": float(end - start),
                 }
                 if not audio_only:
                     seg_frame_dir = frame_dir / f"{seg_idx}_{start}_{end}"
-                    entry_out["frames_path"] = str(seg_frame_dir.absolute())
+                    entry_out["frames_path"] = "./" + str(seg_frame_dir.relative_to(ROOT_PATH))
                 outputs.append(entry_out)
             tracker.mark_done(video_id, {"breed": breed, "segments_count": len(segments)})
             return outputs
@@ -162,7 +162,7 @@ def youtube_download(
                     segment = np.mean(segment, axis=1)
                 sf.write(audio_path, segment, sr)
             entry_out = {
-                "path": str(audio_path.absolute()),
+                "path": "./" + str(audio_path.relative_to(ROOT_PATH)),
                 "label": breed,
                 "audio_len": float(duration),
             }
@@ -187,7 +187,7 @@ def youtube_download(
                             saved_idx += 1
                         frame_idx += 1
                     cap.release()
-                entry_out["frames_path"] = str(seg_frame_dir.absolute())
+                entry_out["frames_path"] = "./" + str(seg_frame_dir.relative_to(ROOT_PATH))
             outputs.append(entry_out)
         tracker.mark_done(video_id, {"breed": breed, "segments_count": len(segments)})
         return outputs

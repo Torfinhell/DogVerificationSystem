@@ -4,8 +4,10 @@ import numpy as np
 import pandas as pd
 import torch
 
-from src.utils.plot_utils import confusion_matrix_figure, sphere_plot_tensor
+from src.logger.utils import confusion_matrix_figure, similarity_matrix_figure, sphere_plot_tensor
 
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
 
 class WandBWriter:
     """
@@ -250,29 +252,12 @@ class WandBWriter:
             {oname: self._mutable_tables[oname]},
             step=self.step,
         )
-    def log_epoch_summary(self, logs_dict: dict, epoch: int):
-        """
-        Log every numeric value in ``logs_dict`` under ``epoch_summary/<key>`` for W&B charts.
-        """
-        if self.wandb is None:
-            return
-        payload = {}
-        for key, value in logs_dict.items():
-            if isinstance(value, torch.Tensor) and value.numel() == 1:
-                value = float(value.detach().cpu().item())
-            if isinstance(value, (float, int, np.integer, np.floating)) and not (
-                isinstance(value, float) and value != value
-            ):
-                payload[f"epoch_summary/{key}"] = float(value)
-        if payload:
-            payload["epoch_summary/epoch"] = float(epoch)
-            self.wandb.log(payload, step=self.step)
 
     def add_plot_3d(
         self,
         plot_name: str,
-        points_3d: np.ndarray,
-        labels: np.ndarray,
+        embeddings: torch.Tensor,
+        labels: torch.Tensor,
         title: str | None = None,
     ):
         """
@@ -280,10 +265,8 @@ class WandBWriter:
         """
         if self.wandb is None:
             return
-        if isinstance(points_3d, torch.Tensor):
-            points_3d = points_3d.detach().float().cpu().numpy()
-        if isinstance(labels, torch.Tensor):
-            labels = labels.detach().cpu().numpy()
+        points_3d = embeddings.detach().float().cpu().numpy()
+        labels = labels.detach().cpu().numpy()
         t = sphere_plot_tensor(
             points_3d, labels, title=title or plot_name
         )
@@ -296,55 +279,49 @@ class WandBWriter:
     def add_confusion_matrix_image(
         self,
         name: str,
-        cm=None,
-        preds=None,
-        labels=None,
+        y_true,
+        y_pred,
+        labels: list, 
         title: str | None = None,
     ):
-        """Log a confusion matrix image from either a confusion matrix or raw preds/labels."""
+        """Log a confusion matrix image from raw preds/labels."""
         if self.wandb is None:
             return
+        cm_array = confusion_matrix(y_true, y_pred)
+        img = confusion_matrix_figure(
+            cm_array, 
+            title=title or name, 
+            class_names=labels
+        )
+        self.wandb.log(
+            {self._object_name(name): self.wandb.Image(img)},
+            step=self.step,
+        )
 
-        if preds is not None and labels is not None:
-            if isinstance(preds, list):
-                preds = torch.cat(preds, dim=0)
-            if isinstance(labels, list):
-                labels = torch.cat(labels, dim=0)
-
-            if preds.dim() > 1:
-                preds = preds.argmax(dim=-1)
-            preds = preds.detach().cpu()
-            labels = labels.detach().cpu()
-
-            if preds.numel() == 0 or labels.numel() == 0 or preds.shape != labels.shape:
-                return
-
-            num_classes = int(max(preds.max().item(), labels.max().item()) + 1)
-            if num_classes < 2:
-                return
-
-            max_classes = 32
-            try:
-                max_classes = int(self.wandb.config.get("confusion_matrix_max_classes", max_classes))
-            except Exception:
-                max_classes = 32
-            if num_classes > max_classes:
-                return
-
-            from torchmetrics.classification import ConfusionMatrix
-
-            device = "cpu"
-            try:
-                device = self.wandb.config.get("device", "cpu")
-            except Exception:
-                pass
-            metric = ConfusionMatrix(num_classes=num_classes, task="multiclass").to(device)
-            cm = metric(preds.to(device), labels.to(device)).detach().cpu().float()
-
-        if cm is None:
+    def add_similarity_matrix_image(
+        self,
+        name: str,
+        similarity_matrix,
+        title: str | None = None,
+        cmap: str = "coolwarm",
+    ):
+        """
+        Log a similarity matrix image.
+        
+        Args:
+            name: Name of the matrix in the tracker.
+            similarity_matrix: 2D array or tensor representing similarity scores.
+            title: Optional title for the figure.
+            cmap: Colormap to use (default "coolwarm").
+        """
+        if self.wandb is None:
             return
-
-        img = confusion_matrix_figure(cm, title=title or name)
+        sm_array = similarity_matrix.detach().cpu().numpy()   
+        img = similarity_matrix_figure(
+            sm_array,
+            title=title or name,
+            cmap=cmap,
+        )
         self.wandb.log(
             {self._object_name(name): self.wandb.Image(img)},
             step=self.step,

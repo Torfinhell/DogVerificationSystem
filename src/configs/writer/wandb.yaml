@@ -8,11 +8,11 @@ logger:
   log_checkpoints: False # set to True if you want to log save_dir with checkpoints to W&B
   id_length: 8 # length of the run_id
   sync_tensorboard: False
-plot_3d: true # PCA 3D scatter of train/val embeddings (matplotlib → W&B Image)
-embedding_max_samples: 2048
-embedding_max_batches: 64
-log_confusion_matrix_image: true # confusion matrix heatmap per eval partition
-confusion_matrix_max_classes: 32 # only log confusion matrices for smaller label spaces
-# Optional multi-panel image logging (plot_images): names length must match batch dim of ``img``
-log_batch_image_names: []
-log_batch_figsize: [12, 4]
+plot_3d_ds:
+    - ["test_backend", "label"]
+    # - ["val", "label"]
+    # - ["train", "label"]
+confusion_matrix:
+  key_labels:
+    - "label"
+
