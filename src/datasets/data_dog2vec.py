@@ -7,7 +7,7 @@ from collections import defaultdict
 import torch
 import soundfile as sf
 from torch.utils.data import Dataset
-
+from src.utils.io_utils import ROOT_PATH
 from .filter_dog2vec import (
     download_raw_jsons,
     download_info_youtube,
@@ -94,7 +94,7 @@ class Dog2VecDataset(BaseDataset):
             except Exception:
                 continue
             all_entries.append({
-                "path": str(path),
+                "path": "./" + str(path.relative_to(ROOT_PATH)),
                 "label": video_to_label[e["video_id"]],
                 "breed": breed_to_index[e["breed"]],
                 "video_id": e["video_id"],
@@ -133,7 +133,9 @@ class Dog2VecDataset(BaseDataset):
         with open(index_path, "w") as f:
             json.dump(final_entries, f, indent=2)
         print(f"Saved {self.part} index ({len(final_entries)} entries) to {index_path}")
-
+    def get_labels(self):
+        index=self.load_index()
+        return sorted(list(set(entry["label"] for entry in index if "label" in entry)))
     def _ensure_pipeline_done(self):
         """Run the preprocessing pipeline if the filtered index does not exist."""
         final_json_path = self.data_dir / "filtered_index.json"

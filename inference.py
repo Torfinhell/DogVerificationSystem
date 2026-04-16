@@ -77,9 +77,9 @@ def main(config):
     if config.get("backends") is not None:
         backend = instantiate(config.backends).to(device)
         print(f"Loaded backend: {backend.__class__.__name__}")
-        train_backend_dataset = config.inferencer.get("train_backend_on_dataset")
-        if train_backend_dataset is not None:
-            fit_backend_on_dataset(model, backend, config, device, train_backend_dataset)
+        fit_backend_dataset = config.inferencer.get("fit_backend_on_dataset")
+        if fit_backend_dataset is not None:
+            fit_backend_on_dataset(model, backend, config, device, fit_backend_dataset)
     save_path = ROOT_PATH / "data" / "saved" / config.inferencer.save_path
     save_path.mkdir(exist_ok=True, parents=True)
     inferencer = Inferencer(

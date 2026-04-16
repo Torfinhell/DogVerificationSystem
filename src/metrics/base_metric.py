@@ -14,9 +14,21 @@ class BaseMetric:
         self.name = name if name is not None else type(self).__name__
 
     @abstractmethod
-    def __call__(self, **batch):
+    def update(self, **batch):
         """
-        Defines metric calculation logic for a given batch.
-        Can use external functions (like TorchMetrics) or custom ones.
+        Updates internal state of metric
         """
         raise NotImplementedError()
+    @abstractmethod
+    def compute(self, **batch):
+        """
+        compute the aggreageted metric from collected interanal states
+        """
+        raise NotImplementedError()
+    @abstractmethod
+    def reset(self, **batch):
+        """
+        Reset internal states to initial
+        """
+        raise NotImplementedError()
+    

@@ -1,10 +1,6 @@
 import contextlib
-
 import numpy as np
-import torch
-from src.metrics.epoch_metric import EpochMetric
-from src.utils.hydra_cfg import cfg_get
-from src.utils.plot_utils import (
+from src.logger.utils import (
     feature_plot_params_from_config,
     plot_images,
     plot_mfcc_coeffs,
@@ -21,21 +17,21 @@ class Trainer(BaseTrainer):
     """
     Trainer class. Defines the logic of batch logging and processing.
     """
-
-    def _autocast(self):
-        amp = self.config.trainer.get("amp") or {}
-        if not amp.get("enabled"):
-            return contextlib.nullcontext()
-        if torch.device(self.device).type != "cuda":
-            return contextlib.nullcontext()
-        dtype = str_to_dtype(amp.get("dtype", "bfloat16"))
-        return torch.autocast(device_type="cuda", dtype=dtype)
+    #TODO finish auto cast training
+    # def _autocast(self):
+    #     amp = self.config.trainer.get("amp") or {}
+    #     if not amp.get("enabled"):
+    #         return contextlib.nullcontext()
+    #     if torch.device(self.device).type != "cuda":
+    #         return contextlib.nullcontext()
+    #     dtype = str_to_dtype(amp.get("dtype", "bfloat16"))
+    #     return torch.autocast(device_type="cuda", dtype=dtype)
 
     def process_batch(
         self,
         batch,
-        metrics: MetricTracker,
-        epoch_metrics: MetricTracker | None = None,
+        metrics: MetricTracker|None=None,
+        backend=None
     ):
         """
         Run batch through the model, compute metrics, compute loss,
@@ -50,8 +46,6 @@ class Trainer(BaseTrainer):
             metrics (MetricTracker): MetricTracker object that computes
                 and aggregates the metrics. The metrics depend on the type of
                 the partition (train or inference).
-            epoch_metrics (MetricTracker | None): optional second tracker updated
-                in parallel for full-epoch averages (train only).
         Returns:
             batch (dict): dict-based batch containing the data from
                 the dataloader (possibly transformed via batch transform),
@@ -59,87 +53,23 @@ class Trainer(BaseTrainer):
         """
         batch = self.move_batch_to_device(batch)
         batch = self.transform_batch(batch)  # transform batch on device -- faster
-
+        # with self._autocast():
+        outputs = self.model(**batch)
+        batch.update(outputs)
         if self.is_train:
-            metric_funcs = self.metrics.get("train", [])
+            all_losses=self.criterion(**batch)
+            batch.update(all_losses)
             self.optimizer.zero_grad()
-        else:
-            metric_funcs = self.metrics.get(
-                getattr(self, "current_eval_part", "inference"),
-                self.metrics.get("inference", []),
-            )
-        with self._autocast():
-            outputs = self.model(**batch)
-            batch.update(outputs)
-
-            # For SV tasks, skip loss computation during validation
-            if not self.is_train and "AAMSoftmax" in self.config.loss_function._target_:
-                # Provide dummy loss for logging purposes
-                batch["loss"] = torch.tensor(0.0, device=self.device)
-            else:
-                all_losses = self.criterion(**batch)
-                batch.update(all_losses)
-
-        if not self.is_train and "embedding" in batch:
-            embeddings = batch["embedding"]
-            embeddings_norm = F.normalize(embeddings, p=2, dim=1)
-            cos_scores = torch.mm(embeddings_norm, embeddings_norm.t())
-            batch["cos_scores"] = cos_scores
-
-        if self.is_train:
             batch["loss"].backward() 
             self._clip_grad_norm()
             self.optimizer.step()
-            if self.lr_scheduler is not None:
+            if self.lr_scheduler is not None and self._scheduler_steps_each_batch():
                 self.lr_scheduler.step()
-
-        # update metrics for each loss (in case of multiple losses)
-        for loss_name in self.config.writer.logger.loss_names:
-            if loss_name in metrics.keys():
-                v = batch[loss_name].item()
-                metrics.update(loss_name, v)
-            if epoch_metrics is not None and loss_name in epoch_metrics.keys():
-                v = batch[loss_name].item()
-                epoch_metrics.update(loss_name, v)
-
-        for met in metric_funcs:
-            if met.name == "confusion_matrix" or isinstance(met, EpochMetric):
-                met(**batch)
-                continue
-
-            met_value = met(**batch)
-            
-            if isinstance(met_value, torch.Tensor):
-                if met_value.numel() == 1:
-                    met_value = float(met_value.detach().cpu().item())
-                else:
-                    continue
-
-            if isinstance(met_value, (float, int)) and not (isinstance(met_value, float) and (met_value != met_value)):  # Check for NaN
-                metrics.update(met.name, met_value)
-                if epoch_metrics is not None:
-                    epoch_metrics.update(met.name, met_value)
-            elif met_value is not None:
-                try:
-                    fv = float(met_value)
-                    metrics.update(met.name, fv)
-                    if epoch_metrics is not None:
-                        epoch_metrics.update(met.name, fv)
-                except Exception:
-                    pass
-
+        if backend is not None:
+            batch["pred"]=backend.predict(batch["embedding"].detach().cpu())
+        if metrics is not None:
+            metrics.update(batch)
         return batch
-
-    @staticmethod
-    def _log_batch_sample_rate(batch: dict) -> int | None:
-        sr = batch.get("sample_rate")
-        if sr is None:
-            return None
-        if isinstance(sr, (list, tuple)):
-            return int(sr[0])
-        if isinstance(sr, torch.Tensor):
-            return int(sr[0].item())
-        return int(sr)
 
     def _log_batch(self, batch_idx, batch, mode="train"):
         """
@@ -170,7 +100,7 @@ class Trainer(BaseTrainer):
             self.writer.add_audio(
                 "audio_sample",
                 audio_sample,
-                sample_rate=self._log_batch_sample_rate(batch),
+                sample_rate=int(batch.get("sample_rate")[0]),
             )
 
         if "spectral_feat" in batch:
@@ -195,25 +125,3 @@ class Trainer(BaseTrainer):
                     title="Mel spectrogram",
                 )
                 self.writer.add_image("spectrogram", img)
-
-        if "img" in batch:
-            imgs = batch["img"]
-            names = cfg_get(self.config, "writer.log_batch_image_names", []) or []
-            figsize = cfg_get(self.config, "writer.log_batch_figsize", (12, 4))
-            if isinstance(figsize, (list, tuple)) and len(figsize) == 2:
-                figsize = (float(figsize[0]), float(figsize[1]))
-            else:
-                figsize = (12.0, 4.0)
-            b = min(len(names), imgs.shape[0]) if isinstance(names, (list, tuple)) else 0
-            if b >= 2:
-                panel = plot_images(
-                    imgs[:b], [str(x) for x in names[:b]], figsize=figsize
-                )
-                self.writer.add_image("images", panel)
-            else:
-                im = imgs[0].detach().cpu().float().numpy()
-                if im.ndim == 3:
-                    im = np.transpose(im, (1, 2, 0))
-                elif im.ndim == 2:
-                    im = np.stack([im, im, im], axis=-1)
-                self.writer.add_image("image", im)

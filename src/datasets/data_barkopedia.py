@@ -9,6 +9,7 @@ from tqdm.auto import tqdm
 import os
 from src.utils.io_utils import ROOT_PATH
 from .base_dataset import BaseDataset
+
 class BarkopediaDataset(BaseDataset):
     NAME="Barkopedia"
     def __init__(
@@ -94,13 +95,13 @@ class BarkopediaDataset(BaseDataset):
 
             if self.part != "test":
                 entry = {
-                    "path": str(audio_path.absolute()),
+                    "path": "./" + str(audio_path.relative_to(ROOT_PATH)),
                     "audio_len": float(row["duration"]),
                     "label": dog_id_to_class[dog_id],
                 }
             else:
                 entry = {
-                    "path": str(audio_path.absolute()),
+                    "path": "./" + str(audio_path.relative_to(ROOT_PATH)),
                     "audio_len": float(row["duration"]),
                 }
             entries.append(entry)
@@ -163,3 +164,6 @@ class BarkopediaDataset(BaseDataset):
         csv_path = target_dir / "metadata.csv"
         df.to_csv(csv_path, index=False)
         print(f"Saved {len(metadata)} entries to {csv_path}")
+    def get_labels(self):
+        index=self.load_index()
+        return sorted(list(set(entry["label"] for entry in index if "label" in entry)))

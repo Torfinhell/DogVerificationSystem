@@ -1,69 +1,61 @@
-train:
-
-
-  - _target_: src.metrics.EERMetric
+classification_metrics:
+  - _target_: src.metrics.ClassificationMetric
+    classification_metric:
+      _target_: torchmetrics.Accuracy
+      task: multiclass
+      num_classes: null
     device: ${trainer.device}
-    name: "TRAIN_EER"
+    name: "Accuracy"
+    labels: null
 
+  - _target_: src.metrics.ClassificationMetric
+    classification_metric:
+      _target_: torchmetrics.Recall
+      task: multiclass
+      num_classes: null
+      average: macro
+    device: ${trainer.device}
+    name: "Recall_macro"
+    labels: null
+  - _target_: src.metrics.ClassificationMetric
+    classification_metric:
+      _target_: torchmetrics.Recall
+      task: multiclass
+      num_classes: null
+      average: micro
+    device: ${trainer.device}
+    name: "Recall_micro"
+    labels: null
+
+  - _target_: src.metrics.ClassificationMetric
+    classification_metric:
+      _target_: torchmetrics.Precision
+      task: multiclass
+      num_classes: null
+      average: macro
+    device: ${trainer.device}
+    name: "Precision_macro"
+    labels: null
+
+  - _target_: src.metrics.ClassificationMetric
+    classification_metric:
+      _target_: torchmetrics.Precision
+      task: multiclass
+      num_classes: null
+      average: micro
+    device: ${trainer.device}
+    name: "Precision_micro"
+    labels: null
+train:
+  ${metrics.classification_metrics}
 val:
   - _target_: src.metrics.EERMetric
     device: ${trainer.device}
     name: "EER"
-
   - _target_: src.metrics.DCFMetric
     device: ${trainer.device}
     p_target: 0.01
     c_miss: 1.0
     c_fa: 1.0
     name: "minDCF"
-
-test:
-
-  - _target_: src.metrics.ClassificationMetric
-    classification_metric:
-      _target_: torchmetrics.Accuracy
-      task: multiclass
-      num_classes: ${num_classes}
-    device: ${trainer.device}
-    name: "Accuracy"
-
-
-  - _target_: src.metrics.ClassificationMetric
-    classification_metric:
-      _target_: torchmetrics.Recall
-      task: multiclass
-      num_classes: ${num_classes}
-      average: macro
-    device: ${trainer.device}
-    name: "Recall_macro"
-
-  - _target_: src.metrics.ClassificationMetric
-    classification_metric:
-      _target_: torchmetrics.Recall
-      task: multiclass
-      num_classes: ${num_classes}
-      average: micro
-    device: ${trainer.device}
-    name: "Recall_micro"
-
-
-  - _target_: src.metrics.ClassificationMetric
-    classification_metric:
-      _target_: torchmetrics.Precision
-      task: multiclass
-      num_classes: ${num_classes}
-      average: macro
-    device: ${trainer.device}
-    name: "Precision_macro"
-
-  - _target_: src.metrics.ClassificationMetric
-    classification_metric:
-      _target_: torchmetrics.Precision
-      task: multiclass
-      num_classes: ${num_classes}
-      average: micro
-    device: ${trainer.device}
-    name: "Precision_micro"
-
-# Confusion matrix is now computed directly in _evaluation_epoch
-# Results include: cm_accuracy, cm_precision_macro/micro, cm_recall_macro/micro, cm_f1_macro/micro
+test_backend: ${metrics.classification_metrics}

@@ -3,85 +3,45 @@ from itertools import repeat
 from hydra.utils import instantiate
 from src.datasets.collate import collate_fn
 from src.utils.init_utils import set_worker_seed
-
-def _non_epoch_metric_names(metric_list):
-    from src.metrics.epoch_metric import EpochMetric
-
-    return [m.name for m in metric_list if not isinstance(m, EpochMetric)]
-
-
-def _build_backend_keys(backends):
-    backend_name_counts = {}
-    backend_keys = []
-    for backend in backends:
-        base_name = backend.__class__.__name__
-        count = backend_name_counts.get(base_name, 0) + 1
-        backend_name_counts[base_name] = count
-        backend_keys.append(base_name if count == 1 else f"{base_name}_{count}")
-    return backend_keys
-
-
-def metric_keys_for_partition(metrics, part_name):
-    """Input: metrics dict, partition name. Output: non-epoch metric names."""
-    from src.metrics.epoch_metric import EpochMetric
-
-    partition_metrics = metrics.get(part_name, [])
-    if isinstance(partition_metrics, dict):
-        partition_metrics = partition_metrics.get("main", [])
-    return [m.name for m in partition_metrics if not isinstance(m, EpochMetric)]
-
-
-def _set_num_classes_on_metric_cfg(metric_cfg, num_classes):
-    if not hasattr(metric_cfg, "get"):
-        return
-    if metric_cfg.get("_target_") == "src.metrics.ClassificationMetric":
-        classification_metric_cfg = metric_cfg.get("classification_metric")
-        if classification_metric_cfg is not None and hasattr(classification_metric_cfg, "__setitem__"):
-            classification_metric_cfg["num_classes"] = num_classes
-    if "num_classes" in metric_cfg:
-        metric_cfg["num_classes"] = num_classes
-
-
-def get_metrics_and_backends(config, dataloaders):
+from collections import defaultdict
+from copy import deepcopy
+from omegaconf import ListConfig, DictConfig, OmegaConf
+def _set_key_on_metric_cfg(metric_cfg, key_name, key_value):
+    def _recursive_update(item):
+        if isinstance(item, (list, ListConfig)):
+            for i in item:
+                _recursive_update(i)
+        elif isinstance(item, (dict, DictConfig)):
+            if isinstance(item, DictConfig):
+                OmegaConf.set_readonly(item, False)
+            for key, value in item.items():
+                if key == key_name:
+                    item[key] = key_value
+                else:
+                    _recursive_update(value)
+    _recursive_update(metric_cfg)
+    return metric_cfg
+def get_metrics_and_backends(config, dataloaders, device):
     """Input: config and dataloaders. Output: instantiated metrics and backends."""
-    metrics_cfg = deepcopy(config.metrics)
-
-    for part in ["val", "test"]:
-        if part in dataloaders and part in metrics_cfg:
-            num_classes = dataloaders[part].dataset.num_classes
-            for met_cfg in metrics_cfg[part]:
-                _set_num_classes_on_metric_cfg(met_cfg, num_classes)
-
-    metrics = instantiate(metrics_cfg)
-    backends = []
+    metrics = {} 
+    for part_name, cfg_metric in config.metrics.items():
+        if part_name == "classification_metrics": 
+            continue
+        num_classes = dataloaders[part_name].dataset.num_classes
+        labels=dataloaders[part_name].dataset.get_labels()
+        _set_key_on_metric_cfg(cfg_metric, "num_classes", num_classes)
+        _set_key_on_metric_cfg(cfg_metric, "labels", labels)
+        metrics[part_name] = instantiate(cfg_metric)
+    backends = {}
     if config.get("backends") is not None:
-        backends = instantiate(config.backends)
-    backend_keys = _build_backend_keys(backends)
-    train_metric_objects = metrics.get("train", [])
-    val_metric_objects = metrics.get("val", [])
-    test_metric_objects = metrics.get("test", [])
-    backend_metric_objects = {}
-    backend_metric_names = {}
-    if backends and isinstance(test_metric_objects, list):
-        for backend_key in backend_keys:
-            per_backend_metrics = deepcopy(test_metric_objects)
-            backend_metric_objects[backend_key] = per_backend_metrics
-            backend_metric_names[backend_key] = _non_epoch_metric_names(per_backend_metrics)
-    prepared_metrics = {
-        "train": train_metric_objects,
-        "val": val_metric_objects,
-        "test": {"backends": backend_metric_objects},
-        "metric_keys": {
-            "train": _non_epoch_metric_names(train_metric_objects),
-            "val": _non_epoch_metric_names(val_metric_objects),
-            "test_backends": backend_metric_names,
-        },
-        "backend_keys": backend_keys,
-    }
-    if "inference" in metrics:
-        prepared_metrics["inference"] = metrics["inference"]
-        prepared_metrics["metric_keys"]["inference"] = _non_epoch_metric_names(metrics["inference"])
-    return prepared_metrics, backends
+        for part_name, part_backends_cfg in config.backends.items():
+            if part_backends_cfg is None: 
+                backends[part_name]=[]
+                continue
+            labels=dataloaders[part_name].dataset.get_labels()
+            _set_key_on_metric_cfg(part_backends_cfg, "labels",labels)
+            backends[part_name]=[instantiate(cfg_backend)  for cfg_backend in part_backends_cfg]      
+    return metrics, backends
 
 def inf_loop(dataloader):
     """Input: finite dataloader. Output: endless dataloader iterator."""
@@ -99,28 +59,37 @@ def move_batch_transforms_to_device(batch_transforms, device):
 
 
 def get_dataloaders(config, device):
-    """Input: config and device. Output: dataloaders and batch transforms."""
     batch_transforms = instantiate(config.transforms.batch_transforms)
     move_batch_transforms_to_device(batch_transforms, device)
     datasets = instantiate(config.datasets)
     dataloaders = {}
+    sampler_criterion = None
+
     for dataset_partition in config.datasets.keys():
         dataset = datasets[dataset_partition]
-
-        assert config.dataloader.dataloader_standard.batch_size <= len(dataset), (
-            f"The batch size ({config.dataloader.dataloader_standard.batch_size}) cannot "
-            f"be larger than the dataset length ({len(dataset)})"
-        )
-
-        dataloader_kwargs = {
+        is_train = (dataset_partition == "train")
+        loader_kwargs = {
             "dataset": dataset,
             "collate_fn": collate_fn,
-            "drop_last": (dataset_partition == "train"),
             "worker_init_fn": set_worker_seed,
         }
-        dataloader_kwargs["shuffle"] = (dataset_partition == "train")
-        partition_dataloader = instantiate(config.dataloader.dataloader_standard, **dataloader_kwargs)
-        dataloaders[dataset_partition] = partition_dataloader
-    return dataloaders, batch_transforms
+        if config.get("batch_sampler", None) is not None and is_train:
+            batch_sampler = instantiate(
+                config.batch_sampler.sampler,
+                ds=dataset,
+            )
+            sampler_criterion = batch_sampler.criterion
+            dataloaders[dataset_partition] = instantiate(
+                config.dataloader.dataloader_with_batch_sampler, 
+                batch_sampler=batch_sampler,
+                **loader_kwargs
+            )
+        else:
+            dataloaders[dataset_partition] = instantiate(
+                config.dataloader.dataloader_standard,
+                shuffle=is_train,
+                drop_last=is_train,
+                **loader_kwargs
+            )
 
-
+    return dataloaders, batch_transforms, sampler_criterion

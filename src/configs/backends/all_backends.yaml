@@ -1,7 +1,10 @@
-- _target_: src.backends.CosineBackend
-  normalize: true
+test_backend:
+  - _target_: src.backends.CosineBackend
+    normalize: true
+    labels: null
 
-- _target_: src.backends.PLDABackend
-  n_components: 256
-  n_iter: 10
-  reg: 1e-6
+  - _target_: src.backends.PLDABackend
+    n_components: 256
+    n_iter: 10
+    reg: 1e-6
+    labels: null

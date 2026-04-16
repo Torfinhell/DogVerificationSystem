@@ -1,0 +1,3 @@
+_target_: torch.optim.lr_scheduler.CyclicLR
+mode: triangular2
+cycle_momentum: false

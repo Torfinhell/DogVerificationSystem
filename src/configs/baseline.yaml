@@ -6,11 +6,8 @@ defaults:
   - dataloader: basic
   - transforms: baseline
   - backends: cos  # Choose backend: cos, plda
+  - scheduler: step_lr
   - _self_
-
-# Must match ``num_classes`` in mapping.json / label_map.json after building indices.
-num_classes: 60
-
 # Audio sample rate for all processing
 sample_rate: 8000
 
@@ -18,16 +15,11 @@ optimizer:
   _target_: torch.optim.Adam
   lr: 3e-4
   lr_loss: null # e.g. 1e-3 for AAM-Softmax embedding; null = same lr for model + loss params
-lr_scheduler:
-  _target_: torch.optim.lr_scheduler.StepLR
-  gamma: 0.9
-  step_size: ${trainer.epoch_len}
 loss_function:
   _target_: src.loss.SoftmaxLoss
 trainer:
   log_step: 50
   n_epochs: 100
-  epoch_len: null
   device_tensors: ["spectral_feat", "label", "audio_lengths", "spectral_feat_lengths"] # which tensors should be on device (ex. GPU)
   resume_from: null # null or path to the checkpoint dir with *.pth and config.yaml
   device: 'auto' # device name or "auto"

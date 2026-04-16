@@ -26,7 +26,7 @@ class Res2Block(nn.Module):
     def forward(self, x):
         x = self.bottle_neck(x)
         outs = []
-        truncated_x_shape=x.shape[-1]-x.shape[-1]%4
+        truncated_x_shape=x.shape[-1]-x.shape[-1]%self.num_groups
         for i, chunk in enumerate(torch.split(x[..., :truncated_x_shape], x.shape[-1]//self.num_groups, dim=-1)):
             if outs:
                 input_tensor = outs[-1] + chunk 
@@ -79,11 +79,30 @@ class AttnStatPool(nn.Module):
             nn.ReLU(),
             nn.Linear(reduction_dim, input_channels, bias=True)
         )
-    def forward(self, x):
-        normalized_weights=F.softmax(self.net(rearrange(x, "b c t -> b t c")), dim=-1)
-        normalized_weights=rearrange(normalized_weights, "b t c -> b c t")
-        mean=(normalized_weights*x).mean(dim=-1)
-        std=(normalized_weights*(x**2)-(mean**2)[..., None]).sum(dim=-1)
+
+    def _masked_mean_std(self, x, spectral_feat_lengths, eps=1e-9):
+        lengths=spectral_feat_lengths
+        if lengths is None:
+            mean = x.mean(dim=-1)
+            std = torch.sqrt((x**2).mean(dim=-1) - mean**2 + eps)
+            return mean, std
+        lengths = lengths.to(x.device)
+        if lengths.ndim == 1:
+            lengths = lengths.unsqueeze(1)
+        mask = torch.arange(x.size(-1), device=x.device).view(1, 1, -1) < lengths.view(-1, 1, 1)
+        mask = mask.expand(-1, x.size(1), -1).to(x.dtype)
+        masked_x = x * mask
+        lengths = lengths.to(x.dtype).clamp_min(1).unsqueeze(1)
+        return masked_x.sum(dim=-1) / lengths.squeeze(-1)
+        
+
+    def forward(self, x, spectral_feat_lengths):
+        normalized_weights = F.softmax(self.net(rearrange(x, "b c t -> b t c")), dim=-1)
+        normalized_weights = rearrange(normalized_weights, "b t c -> b c t")
+        mean = self._masked_mean_std(normalized_weights * x, spectral_feat_lengths)
+        weighted_sq = normalized_weights * (x * x)
+        mean2 = self._masked_mean_std(weighted_sq, spectral_feat_lengths)
+        std = torch.sqrt((mean2 - mean * mean).clamp_min(1e-9))
         return torch.cat([mean, std], dim=1)
 class PreEmphasis(torch.nn.Module):
     def __init__(self, num_feats, alpha: float = 0.97):
@@ -155,7 +174,7 @@ class EcappaTDNNCustom(nn.Module):
             nn.Dropout(dropout)
         )
 
-    def forward(self, spectral_feat, **batch):
+    def forward(self, spectral_feat, spectral_feat_lengths, **batch):
         """
         Forward pass for custom implementation.
 
@@ -173,8 +192,14 @@ class EcappaTDNNCustom(nn.Module):
             x=layer(x)
             outputs.append(x)
         combined_output=torch.cat(outputs, dim=-1)
-        embedding=self.output_net[:-1](combined_output)
-        logits=self.output_net[-1](embedding)
+        scale = combined_output.shape[-1] // spectral_feat.shape[-1]
+        scaled_lengths = (spectral_feat_lengths * scale).long()
+        x = self.output_net[0](combined_output)
+        x = self.output_net[1](x, scaled_lengths)
+        embedding = x
+        for module in self.output_net[2:-1]:
+            embedding = module(embedding)
+        logits = self.output_net[-1](embedding)
         return {"logits": logits, "embedding": embedding}
 
     def __str__(self):

@@ -3,61 +3,60 @@ classification_metrics:
     classification_metric:
       _target_: torchmetrics.Accuracy
       task: multiclass
-      num_classes: ${num_classes}
+      num_classes: null
     device: ${trainer.device}
     name: "Accuracy"
+    labels: null
 
   - _target_: src.metrics.ClassificationMetric
     classification_metric:
       _target_: torchmetrics.Recall
       task: multiclass
-      num_classes: ${num_classes}
+      num_classes: null
       average: macro
     device: ${trainer.device}
     name: "Recall_macro"
-
+    labels: null
   - _target_: src.metrics.ClassificationMetric
     classification_metric:
       _target_: torchmetrics.Recall
       task: multiclass
-      num_classes: ${num_classes}
+      num_classes: null
       average: micro
     device: ${trainer.device}
     name: "Recall_micro"
-
+    labels: null
 
   - _target_: src.metrics.ClassificationMetric
     classification_metric:
       _target_: torchmetrics.Precision
       task: multiclass
-      num_classes: ${num_classes}
+      num_classes: null
       average: macro
     device: ${trainer.device}
     name: "Precision_macro"
+    labels: null
 
   - _target_: src.metrics.ClassificationMetric
     classification_metric:
       _target_: torchmetrics.Precision
       task: multiclass
-      num_classes: ${num_classes}
+      num_classes: null
       average: micro
     device: ${trainer.device}
     name: "Precision_micro"
-#TODO calculate classification metrics  
+    labels: null
 train:
   ${metrics.classification_metrics}
 val:
-  - _target_: src.metrics.EERMetric
-    device: ${trainer.device}
-    name: "EER"
-  - _target_: src.metrics.DCFMetric
-    device: ${trainer.device}
-    p_target: 0.01
-    c_miss: 1.0
-    c_fa: 1.0
-    name: "minDCF"
-#TODO also fix parametrs for metrics(check them at least)
-test_backend:
-  ${metrics.classification_metrics}
+  # - _target_: src.metrics.EERMetric
+  #   device: ${trainer.device}
+  #   name: "EER"
+  # - _target_: src.metrics.DCFMetric
+  #   device: ${trainer.device}
+  #   p_target: 0.01
+  #   c_miss: 1.0
+  #   c_fa: 1.0
+  #   name: "minDCF"
+test_backend: ${metrics.classification_metrics}
   
-#TODO what about confusion matrix

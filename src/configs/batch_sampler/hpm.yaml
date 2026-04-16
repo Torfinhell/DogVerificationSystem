@@ -5,3 +5,4 @@ sampler:
   n_utterances_per_speaker: 4
   random_seed: 42
   drop_last: True
+  num_iter: 1
