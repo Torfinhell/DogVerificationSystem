@@ -1,0 +1,11 @@
+test_backend:
+  - _target_: src.backends.MLPBackend
+    hidden_dim: 512
+    n_layers: 2
+    dropout: 0.1
+    lr: 1e-3
+    epochs: 10
+    batch_size: 64
+    weight_decay: 1e-5
+    normalize_inputs: true
+    labels: null

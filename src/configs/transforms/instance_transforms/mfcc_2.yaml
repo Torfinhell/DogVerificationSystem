@@ -18,7 +18,7 @@ train:
   get_spectral_feat:
     _target_: src.transforms.MfccExtractor
     sample_rate: ${sample_rate}
-    n_mfcc: 80
+    n_mfcc: ${model.n_feats}
     hop_length_sec: 0.01      # 10 ms
     win_length_sec: 0.025     # 25 ms
 
@@ -32,6 +32,6 @@ inference:
   get_spectral_feat:
     _target_: src.transforms.MfccExtractor
     sample_rate: ${sample_rate}
-    n_mfcc: 80
+    n_mfcc: ${model.n_feats}
     hop_length_sec: 0.01
     win_length_sec: 0.025
