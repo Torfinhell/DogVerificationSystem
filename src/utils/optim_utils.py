@@ -8,17 +8,14 @@ def instantiate_optimizer_and_scheduler(
     loss_module: nn.Module,
     epoch_len,
 ):
-    if config.trainer.compile.enabled:
-        model = instantiate(config.trainer.compile.call, model)
-        loss_module = instantiate(config.trainer.compile.call, loss_module)
+    # Extract parameters BEFORE compilation, since compiled models don't have .parameters()
+    model_params = [p for p in model.parameters() if p.requires_grad]
+    loss_params = [p for p in loss_module.parameters() if p.requires_grad]
 
     lr = float(config.max_lr)
     lr_loss = float(config.get("max_lr_loss")) if config.get("max_lr_loss") is not None else None
     base_lr = float(config.base_lr)
     base_lr_loss = float(config.base_lr_loss)
-
-    model_params = [p for p in model.parameters() if p.requires_grad]
-    loss_params = [p for p in loss_module.parameters() if p.requires_grad]
 
     optimizer_config = config.get("optimizer")
     if optimizer_config is None:

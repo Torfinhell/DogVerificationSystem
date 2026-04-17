@@ -37,14 +37,6 @@ def main(config):
     for param in model.parameters():
         param.requires_grad = True
     
-    # Multi-GPU support - removed DataParallel as it causes gradient issues
-    # num_gpus = config.trainer.get("num_gpus", 1)
-    # if num_gpus > 1 and device.startswith("cuda"):
-    #     logger.info(f"Using {num_gpus} GPUs with DataParallel")
-    #     model = torch.nn.DataParallel(model, device_ids=list(range(num_gpus)))
-    
-    if config.trainer.compile.enabled:
-        model = instantiate(config.trainer.compile.call, model)
     training_labels=dataloaders["train"].dataset.get_labels()
     logger.info(model)
     loss_function = instantiate(config.loss_function, labels=training_labels).to(device)
@@ -52,9 +44,17 @@ def main(config):
     # Ensure all loss function parameters require gradients
     for param in loss_function.parameters():
         param.requires_grad = True
+    
+    # Instantiate optimizer BEFORE compilation (compiled models don't have .parameters())
     metrics, backends = get_metrics_and_backends(config, dataloaders, device)
     epoch_len = len(dataloaders["train"])
-    optimizer, scheduler = instantiate_optimizer_and_scheduler(config, model, loss_function, epoch_len) #torch.compile is also called here
+    optimizer, scheduler = instantiate_optimizer_and_scheduler(config, model, loss_function, epoch_len)
+    
+    # NOW compile both model and criterion after optimizer is created
+    if config.trainer.compile.enabled:
+        model = instantiate(config.trainer.compile.call, model)
+        loss_function = instantiate(config.trainer.compile.call, loss_function)
+    
     trainer = Trainer(
         model=model,
         criterion=loss_function,
