@@ -48,15 +48,25 @@ class PLDABackend(BaseBackend):
 
     def fit(self, embeddings, labels=None):
         self.reset()
+        # CPU SVD does not support float16; keep PLDA stats in float32.
+        embeddings = embeddings.float()
         
         if labels is not None:
+            labels = labels.to(device=embeddings.device)
             fit_labels = []
             fit_embeddings = []
             for i, target_label in enumerate(self.label_reference):
                 mask = (labels == target_label)
                 if mask.any():
                     fit_embeddings.append(embeddings[mask])
-                    fit_labels.append(torch.full((mask.sum(),), target_label, device=embeddings.device))
+                    fit_labels.append(
+                        torch.full(
+                            (mask.sum(),),
+                            target_label,
+                            device=embeddings.device,
+                            dtype=labels.dtype,
+                        )
+                    )
             
             self.train_embeddings = torch.cat(fit_embeddings).detach().clone()
             self.train_labels = torch.cat(fit_labels).detach().clone()
