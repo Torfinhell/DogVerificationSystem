@@ -7,22 +7,25 @@ train:
     transforms:
       - _target_: src.transforms.ResampleTransform
         target_sample_rate: ${sample_rate}
-      - _target_: src.transforms.MusanNoiseAugment
-        download_dir: "data/augs/musan"
-        noise_types: ["noise"]  # options: ["noise", "speech", "music"]
-        snr_range: [10, 20]  # Signal-to-Noise Ratio in dB
-        p: 0.5  # Probability of applying
-        sample_rate: ${sample_rate}
-      - _target_: src.transforms.RIRReverbAugment
-        download_dir: "data/data_augs/reverb"
-        p: 0.5  # Probability of applying
-        sample_rate: ${sample_rate}
+      - _target_: torchvision.transforms.v2.RandomChoice
+        transforms:
+          - _target_: src.transforms.MusanNoiseAugment
+            download_dir: "data/augs/musan"
+            noise_types: ["noise"]  # options: ["noise", "speech", "music"]
+            snr_range: [10, 20]  # Signal-to-Noise Ratio in dB
+            p: 0.5  # Probability of applying
+            sample_rate: ${sample_rate}
+          - _target_: src.transforms.RIRReverbAugment
+            download_dir: "data/augs/reverb"
+            p: 0.5  # Probability of applying
+            sample_rate: ${sample_rate}
 
   get_spectral_feat: # special key for getting spectral_feat
     _target_: torchvision.transforms.v2.Compose
     transforms:
       - _target_: torchaudio.transforms.MelSpectrogram
         sample_rate: ${sample_rate}
+        n_mels: ${model.n_feats}
       - _target_: src.transforms.FbankAug
         freq_mask_width: [0, 8]
         time_mask_width: [0, 10]

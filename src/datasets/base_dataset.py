@@ -47,6 +47,8 @@ class BaseDataset(Dataset):
         if "breed" in data_dict:
             instance_data["breed"] = data_dict["breed"]
         instance_data = self.preprocess_data(instance_data)
+        if "audio" in instance_data:
+            instance_data["audio"] = instance_data["audio"].squeeze()
         if self.instance_transforms and "get_spectral_feat" in self.instance_transforms:
             spectral_feat = self.instance_transforms["get_spectral_feat"](instance_data["audio"])
             instance_data.update(self.preprocess_data({"spectral_feat": spectral_feat}))

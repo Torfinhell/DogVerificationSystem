@@ -1,8 +1,8 @@
 import contextlib
 import numpy as np
+import torch
 from src.logger.utils import (
     feature_plot_params_from_config,
-    plot_images,
     plot_mfcc_coeffs,
     plot_spectrogram,
 )
@@ -17,15 +17,20 @@ class Trainer(BaseTrainer):
     """
     Trainer class. Defines the logic of batch logging and processing.
     """
-    #TODO finish auto cast training
-    # def _autocast(self):
-    #     amp = self.config.trainer.get("amp") or {}
-    #     if not amp.get("enabled"):
-    #         return contextlib.nullcontext()
-    #     if torch.device(self.device).type != "cuda":
-    #         return contextlib.nullcontext()
-    #     dtype = str_to_dtype(amp.get("dtype", "bfloat16"))
-    #     return torch.autocast(device_type="cuda", dtype=dtype)
+    def _autocast(self):
+        """
+        Context manager for automatic mixed precision training.
+        
+        Returns:
+            context manager: torch.autocast context or nullcontext
+        """
+        amp = self.config.trainer.get("amp") or {}
+        if not amp.get("enabled"):
+            return contextlib.nullcontext()
+        if torch.device(self.device).type != "cuda":
+            return contextlib.nullcontext()
+        dtype = str_to_dtype(amp.get("dtype", "bfloat16"))
+        return torch.autocast(device_type="cuda", dtype=dtype)
 
     def process_batch(
         self,
@@ -53,18 +58,35 @@ class Trainer(BaseTrainer):
         """
         batch = self.move_batch_to_device(batch)
         batch = self.transform_batch(batch)  # transform batch on device -- faster
-        # with self._autocast():
-        outputs = self.model(**batch)
-        batch.update(outputs)
+        with self._autocast():
+            outputs = self.model(**batch)
+            batch.update(outputs)
+            if self.is_train:
+                all_losses=self.criterion(**batch)
+                batch.update(all_losses)
+        
         if self.is_train:
-            all_losses=self.criterion(**batch)
-            batch.update(all_losses)
-            self.optimizer.zero_grad()
-            batch["loss"].backward() 
-            self._clip_grad_norm()
-            self.optimizer.step()
-            if self.lr_scheduler is not None and self._scheduler_steps_each_batch():
-                self.lr_scheduler.step()
+            # Get accumulation steps from config
+            accumulation_steps = self.config.trainer.get("accumulation_steps", 1)
+            
+            # Zero gradients at the start of each accumulation cycle
+            if self._batch_count % accumulation_steps == 0:
+                self.optimizer.zero_grad()
+            
+            # Scale loss for gradient accumulation
+            scaled_loss = batch["loss"] / accumulation_steps
+            scaled_loss.backward()
+            
+            # Update batch counter
+            self._batch_count += 1
+                
+            # Only update weights on accumulation step
+            if self._batch_count % accumulation_steps == 0:
+                self._clip_grad_norm()
+                self.optimizer.step()
+                if self.lr_scheduler is not None and self._scheduler_steps_each_batch():
+                    self.lr_scheduler.step()
+        
         if backend is not None:
             batch["pred"]=backend.predict(batch["embedding"].detach().cpu())
         if metrics is not None:

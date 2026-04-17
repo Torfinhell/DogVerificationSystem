@@ -5,6 +5,7 @@ train:
   get_spectral_feat: # special key for getting spectral_feat
     _target_: torchaudio.transforms.MelSpectrogram
     sample_rate: ${sample_rate}
+    n_mels: ${model.n_feats}
 inference:
   audio:  # Resample audio to target sample rate first
     _target_: src.transforms.ResampleTransform

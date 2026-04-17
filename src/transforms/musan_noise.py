@@ -99,7 +99,7 @@ class MusanNoiseAugment:
             augmented = audio + noise
             if isinstance(audio, np.ndarray):
                 return augmented.numpy()
-            return augmented
+            return augmented.squeeze()
         except Exception as e:
             logger.warning(f"Error applying MUSAN noise augmentation: {e}, returning original audio")
-            return audio
+            return audio.squeeze()
