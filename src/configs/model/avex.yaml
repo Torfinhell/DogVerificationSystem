@@ -1,0 +1,9 @@
+_target_: src.model.AVEXModel
+model_name: "esp_aves2_sl_beats_all"
+device: "cpu"
+return_features_only: true
+freeze_backbone: true
+num_classes: null
+probe_hidden_dim: 768
+probe_dropout: 0.0
+normalize_features: true

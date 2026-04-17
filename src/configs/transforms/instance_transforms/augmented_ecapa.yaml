@@ -23,9 +23,11 @@ train:
   get_spectral_feat: # special key for getting spectral_feat
     _target_: torchvision.transforms.v2.Compose
     transforms:
-      - _target_: torchaudio.transforms.MelSpectrogram
+      - _target_: src.transforms.MfccExtractor
         sample_rate: ${sample_rate}
-        n_mels: ${model.n_feats}
+        n_mfcc: ${model.n_feats}
+        hop_length_sec: 0.01
+        win_length_sec: 0.025
       - _target_: src.transforms.FbankAug
         freq_mask_width: [0, 8]
         time_mask_width: [0, 10]

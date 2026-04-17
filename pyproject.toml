@@ -27,4 +27,7 @@ dependencies = [
     "pydub>=0.25.1",
     "seaborn>=0.13.2",
     "gdown>=6.0.0",
+    "cython>=3.2.4",
+    "numpy>=2.2.6",
+    "setuptools>=82.0.1",
 ]
