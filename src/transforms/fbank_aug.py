@@ -69,4 +69,4 @@ class FbankAug(nn.Module):
 
         except Exception as e:
             logger.warning(f"Error applying FbankAug: {e}, returning original input")
-            return x
+            return x.squeeze()

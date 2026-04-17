@@ -44,26 +44,24 @@ class XVectorModel(nn.Module):
         lengths=spectral_feat_lengths
         if lengths is None:
             mean = x.mean(dim=-1)
-            std = torch.sqrt((x * x).mean(dim=-1) - mean * mean + eps)
+            std = torch.sqrt((x**2).mean(dim=-1) - mean**2 + eps)
             return mean, std
-
         lengths = lengths.to(x.device)
         if lengths.ndim == 1:
             lengths = lengths.unsqueeze(1)
         mask = torch.arange(x.size(-1), device=x.device).view(1, 1, -1) < lengths.view(-1, 1, 1)
         mask = mask.expand(-1, x.size(1), -1).to(x.dtype)
-        masked = x * mask
+        masked_x = x * mask
         lengths = lengths.to(x.dtype).clamp_min(1).unsqueeze(1)
-        mean = masked.sum(dim=-1) / lengths
-        mean2 = (masked * masked).sum(dim=-1) / lengths
-        std = torch.sqrt((mean2 - mean * mean).clamp_min(eps))
-        return mean, std
+        return masked_x.sum(dim=-1) / lengths.squeeze(-1)
 
-    def forward(self, spectral_feat, spectral_feat_lengths):
+    def forward(self, spectral_feat, spectral_feat_lengths, **batch):
         x = spectral_feat
         for layer in self.tdnns:
             x = layer(x)
-        mean, std = self._masked_mean_std(x, spectral_feat_lengths)
+        mean = self._masked_mean_std( x, spectral_feat_lengths)
+        mean2 = self._masked_mean_std(x * x, spectral_feat_lengths)
+        std = torch.sqrt((mean2 - mean * mean).clamp_min(1e-9))
         x = torch.cat([mean, std], dim=1)
         embedding = self.segment_layers[:-1](x)
         logits = self.segment_layers[-1](embedding)

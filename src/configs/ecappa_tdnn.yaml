@@ -36,6 +36,7 @@ trainer:
   resume_from: null
   device: 'auto'
   allow_tf32: true
+  accumulation_steps: 1 # gradient accumulation steps; >1 for effective larger batch size
   amp:
     enabled: false
     dtype: bfloat16

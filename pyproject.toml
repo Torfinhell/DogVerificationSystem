@@ -26,4 +26,5 @@ dependencies = [
     "opencv-python>=4.13.0.92",
     "pydub>=0.25.1",
     "seaborn>=0.13.2",
+    "gdown>=6.0.0",
 ]

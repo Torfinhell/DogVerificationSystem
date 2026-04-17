@@ -216,6 +216,8 @@ class BaseTrainer:
         self.writer.set_step((epoch - 1) * self.epoch_len)
         self.writer.add_scalar("epoch", epoch)
         last_train_metrics={}
+        # Reset batch counter for gradient accumulation at the start of each epoch
+        self._batch_count = 0
         for batch_idx, batch in enumerate(
             tqdm(self.train_dataloader, desc="train", total=self.epoch_len)
         ):
@@ -257,6 +259,14 @@ class BaseTrainer:
                 self.static_metrics.reset()
             if batch_idx + 1 >= self.epoch_len:
                 break
+        
+        # Handle remaining gradients at end of epoch for gradient accumulation
+        accumulation_steps = self.config.trainer.get("accumulation_steps", 1)
+        if hasattr(self, '_batch_count') and self._batch_count % accumulation_steps != 0:
+            self._clip_grad_norm()
+            self.optimizer.step()
+            self.optimizer.zero_grad()
+        
         if self.lr_scheduler is not None and not self._scheduler_steps_each_batch():
             self.lr_scheduler.step()
         logs={f"train_{name}": value for name, value in last_train_metrics.items()}

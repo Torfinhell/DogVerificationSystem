@@ -51,9 +51,9 @@ classification_metrics:
 train:
   ${metrics.classification_metrics}
 val:
-  # - _target_: src.metrics.EERMetric
-  #   device: ${trainer.device}
-  #   name: "EER"
+  - _target_: src.metrics.EERMetric
+    device: ${trainer.device}
+    name: "EER"
   # - _target_: src.metrics.DCFMetric
   #   device: ${trainer.device}
   #   p_target: 0.01

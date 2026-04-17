@@ -1,35 +1,42 @@
 defaults:
   - model: x_vector
   - writer: wandb
-  - metrics: basic
+  - metrics: barkopedia
   - datasets: barkopedia
   - dataloader: basic
   - transforms: x_vector
   - batch_sampler: hpm
-  - backends: cos  # Choose backend: cos, plda
-  - scheduler: step_lr
+  - backends: all_backends
+  - scheduler: cosine
   - _self_
-sample_rate: 800
-# Must match ``num_classes`` in mapping.json / label_map.json after building indices.
+
+sample_rate: 8000
 yandex_token: null
+
 optimizer:
   _target_: torch.optim.Adam
-  lr: 3e-4
-  lr_loss: null # set when using AAM-Softmax (e.g. 1e-3 for embedding weights)
+  weight_decay: 2e-5
+
+base_lr: 1e-2
+max_lr: 1e-2
+base_lr_loss: 1e-2
+max_lr_loss: 1e-2
+
 loss_function:
   _target_: src.loss.AAMSoftmaxLoss
   embedding_dim: ${model.output_dim}
-  num_speakers: null
-  scale: 3
-  margin: 0.1
+  scale: 30
+  margin: 0.2
   label_smoothing: 0.1
+
 trainer:
-  log_step: 50
-  n_epochs: 10
-  device_tensors: ["spectral_feat", "label", "audio_lengths", "spectral_feat_lengths"] # which tensors should be on device (ex. GPU)
-  resume_from: null # null or path to the checkpoint dir with *.pth and config.yaml
-  device: 'auto' # device name or "auto"
+  log_step: 5
+  n_epochs: 100
+  device_tensors: ["spectral_feat", "label", "audio_lengths", "spectral_feat_lengths"]
+  resume_from: null
+  device: 'auto'
   allow_tf32: true
+  accumulation_steps: 1 # gradient accumulation steps; >1 for effective larger batch size
   amp:
     enabled: false
     dtype: bfloat16
@@ -41,9 +48,9 @@ trainer:
       fullgraph: false
       dynamic: false
       backend: inductor
-  override: False # if True, will override the previous run with the same name
-  monitor: "max val_MulticlassAccuracy" # "off" or "max/min metric_name", i.e. our goal is to maximize/minimize metric
-  save_period: 5 # checkpoint each save_period epochs in addition to the best epoch
-  early_stop: ${trainer.n_epochs} # epochs for early stopping
+  override: False
+  monitor: "max test_COS_Accuracy"
+  save_period: 1
+  early_stop: ${trainer.n_epochs}
   save_dir: "saved"
   seed: 1
